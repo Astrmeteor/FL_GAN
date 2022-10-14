@@ -15,7 +15,7 @@ from models.gan import Generator, Discriminator
 parser = argparse.ArgumentParser(description="Flower Simulation with PyTorch")
 
 parser.add_argument("--num_client_cpus", type=int, default=2)
-parser.add_argument("--num_rounds", type=int, default=2)
+parser.add_argument("--num_rounds", type=int, default=1)
 
 
 # Flower client, adapted from Pytorch quickstart example
@@ -27,7 +27,9 @@ class FlowerClient(fl.client.NumPyClient):
 
         # Instantiate model
         self.generator = Generator()
+        self.generator.initialize_weights()
         self.discriminator = Discriminator()
+        self.discriminator.initialize_weights()
 
         # Determine device
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -35,7 +37,6 @@ class FlowerClient(fl.client.NumPyClient):
     ### obtain generator parameter
     def get_parameters(self, config):
         return get_params(self.generator)
-
 
     def fit(self, parameters, config):
         set_params(self.generator, parameters)
@@ -62,11 +63,12 @@ class FlowerClient(fl.client.NumPyClient):
 
     def evaluate(self, parameters, config):
         parameters = get_params(self.discriminator)
-        set_params(self.discriminator, parameters)
+        net_d = Discriminator()
+        set_params(net_d, parameters)
 
         num_workers = int(ray.get_runtime_context().get_assigned_resources()["CPU"])
         valloader = get_dataloader(
-            self.fed_dir, self.cid, is_train=False, batch_size=50, workers=num_workers
+            self.fed_dir, self.cid, is_train=False, batch_size=64, workers=num_workers
         )
 
         # Send model to device
@@ -99,29 +101,22 @@ def set_params(model: torch.nn.ModuleList, params: List[np.ndarray]):
     state_dict = OrderedDict({k: torch.from_numpy(np.copy(v)) for k, v in params_dict})
     model.load_state_dict(state_dict, strict=True)
 
+
 def get_evaluate_fn(
-    testset: torchvision.datasets.CIFAR10,
 ) -> Callable[[fl.common.NDArrays], Optional[Tuple[float, float]]]:
     """Return an evaluation function for centralized evaluation."""
 
     def evaluate(
-        server_round: int, parameters: fl.common.NDArrays, config: Dict[str, Scalar]
-    ) -> Optional[Tuple[float, float]]:
+            parameters: fl.common.NDArrays,
+    ):
         """Use the entire CIFAR-10 test set for evaluation."""
-
+        ### generate synthetic data
         # determine device
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
         model = Generator()
-
         set_params(model, parameters)
         model.to(device)
-
-        testloader = torch.utils.data.DataLoader(testset, batch_size=50)
-        loss, accuracy = test(model, testloader, device=device)
-
-        # return statistics
-        return loss, {"accuracy": accuracy}
 
     return evaluate
 
@@ -131,8 +126,8 @@ if __name__ == "__main__":
     # parse input arguments
     args = parser.parse_args()
 
-    pool_size = 8  # number of dataset partions (= number of total clients)
-    num_client = 5
+    pool_size = 2  # number of dataset partions (= number of total clients)
+    num_client = 2
     client_resources = {
         "num_cpus": args.num_client_cpus
     }  # each client will get allocated 1 CPUs
@@ -153,12 +148,14 @@ if __name__ == "__main__":
         min_available_clients=num_client,  # All clients should be available
         on_fit_config_fn=fit_config,
         evaluate_fn=None
-        #evaluate_fn=get_evaluate_fn(testset),  # centralised evaluation of global model
+        # evaluate_fn=get_evaluate_fn(),  # centralised evaluation of global model
     )
+
 
     def client_fn(cid: str):
         # create a single client instance
         return FlowerClient(cid, fed_dir)
+
 
     # (optional) specify Ray config
     ray_init_args = {"include_dashboard": False}
@@ -183,5 +180,8 @@ if __name__ == "__main__":
     g_net.to(device)
     d_net.to(device)
 
-    train(g_net, d_net, trainloader, 2, device)
+    # train(g_net, d_net, trainloader, 2, device)
+    loss, accuracy = test(d_net, testloader, device)
+    print(loss, accuracy)
     """
+

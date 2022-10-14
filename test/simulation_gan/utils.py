@@ -89,14 +89,15 @@ def train(generator, discriminator, train_loader, epoch, device):
 
 def test(discriminator, testloader, device: str):
     """Validate the network on the entire test set."""
-    criterion = torch.nn.CrossEntropyLoss()
+    criterion = torch.nn.BCELoss()
     correct, total, loss = 0, 0, 0.0
     discriminator.eval()
     with torch.no_grad():
         for data in testloader:
             images, labels = data[0].to(device), data[1].to(device)
             outputs = discriminator(images)
-            loss += criterion(outputs, labels).item()
+            labels = labels.to(torch.float32)
+            loss += criterion(outputs.view(-1), labels).item()
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()

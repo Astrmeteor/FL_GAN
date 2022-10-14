@@ -1,5 +1,6 @@
 import torch.nn as nn
 
+
 class Generator(nn.Module):
     def __init__(self, nz=100, ngf=128, nc=3):
         super(Generator, self).__init__()
@@ -33,6 +34,7 @@ class Generator(nn.Module):
             elif classname.find('BatchNorm') != -1:
                 nn.init.normal_(m.weight.data, b_mean, b_std)
                 nn.init.constant_(m.bias.data, 0)
+
 
 class Discriminator(nn.Module):
     def __init__(self, nc=3, ndf=128):
