@@ -4,6 +4,9 @@ from torchvision.datasets import CIFAR10
 import torch
 from torch.utils.data import DataLoader
 from collections import OrderedDict
+import numpy as np
+from scipy import linalg
+
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -15,14 +18,16 @@ def load_data():
     )
     trainset = CIFAR10("/Users/tianying/Desktop/FL/data", train=True, download=True, transform=transform)
     testset = CIFAR10("/Users/tianying/Desktop/FL/data", train=False, download=True, transform=transform)
-    trainloader = DataLoader(trainset, batch_size=32, shuffle=True)
-    testloader = DataLoader(testset, batch_size=32)
+    trainloader = DataLoader(trainset, batch_size=64, shuffle=False,
+                             sampler=torch.utils.data.RandomSampler(data_source=trainset, num_samples=1000, replacement=True))
+    testloader = DataLoader(testset, batch_size=64)
     return trainloader, testloader
 
 
 def train(net, trainloader, epochs):
     """Train the network on the training set."""
     optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
+    fid = []
     for _ in range(epochs):
         for images, _ in trainloader:
             optimizer.zero_grad()
@@ -32,6 +37,11 @@ def train(net, trainloader, epochs):
             loss = recon_loss + 0.05 * kld_loss
             loss.backward()
             optimizer.step()
+            # fid.append(calculate_fid(
+            #   images.detach().numpy().reshape(images.size(0), -1), recon_images.detach().numpy().reshape(recon_images.size(0), -1)))
+
+    # FID = np.sum(fid) / len(trainloader)
+    # return FID
 
 
 def test(net, testloader):
@@ -62,7 +72,26 @@ def generate(net, image):
     with torch.no_grad():
         return net.forward(image)
 
+
 def set_parameters(model, parameters):
     params_dict = zip(model.state_dict().keys(), parameters)
     state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
     model.load_state_dict(state_dict, strict=True)
+
+
+def calculate_fid(act1, act2):
+     # calculate mean and covariance statistics
+     mu1 = act1.mean(axis=0)
+     sigma1 = np.cov(act1, rowvar=False)
+     mu2, sigma2 = act2.mean(axis=0), np.cov(act2, rowvar=False)
+     # calculate sum squared difference between means
+     ssdiff = np.sum((mu1 - mu2)**2.0)
+     # calculate sqrt of product between cov
+     covmean = linalg.sqrtm(sigma1.dot(sigma2))
+     # check and correct imaginary numbers from sqrt
+     if np.iscomplexobj(covmean):
+      covmean = covmean.real
+     # calculate score
+     fid = ssdiff + np.trace(sigma1 + sigma2 - 2.0 * covmean)
+     return fid
+

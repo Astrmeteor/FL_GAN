@@ -15,6 +15,7 @@ class CifarClient(fl.client.NumPyClient):
         self.model = model
         self.trainloader = trainloader
         self.testloader = testloader
+        self.fid = 0
 
     def get_parameters(self, config):
         return [val.cpu().numpy() for _, val in self.model.state_dict().items()]
@@ -42,7 +43,7 @@ def main():
     net = Net()
     trainloader, testloader = load_data()
 
-    fl.client.start_numpy_client(server_address="10.1.2.108:8080",
+    fl.client.start_numpy_client(server_address="localhost:8080",
                                  client=CifarClient(net, trainloader, testloader))
 
 

@@ -172,6 +172,7 @@ if __name__ == "__main__":
         on_fit_config_fn=fit_config,
         evaluate_fn=None,
         evaluate_metrics_aggregation_fn=weighted_average,
+
         # evaluate_fn=get_evaluate_fn(),  # centralised evaluation of global model
     )
 
