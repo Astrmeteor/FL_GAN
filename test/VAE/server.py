@@ -1,5 +1,5 @@
 import flwr as fl
-from typing import Tuple, Optional, Dict
+from typing import Dict
 from flwr.common import Metrics
 from models import Net
 import matplotlib.pyplot as plt
@@ -7,8 +7,8 @@ from flwr.common.typing import Scalar
 import torch
 import numpy as np
 from client import CifarClient
-from utils import set_parameters, load_data
-
+from utils import set_parameters, load_data, test
+from torch.utils.data import DataLoader
 import utils
 
 def get_evaluate_fn():
@@ -22,6 +22,11 @@ def get_evaluate_fn():
             set_parameters(model, parameters)  # Update model with the latest parameters
             random_vector_for_generation = torch.normal(0, 1, (16, 10))
             generate_and_save_images(model, server_round, random_vector_for_generation)
+
+            _, testset, _ = load_data()
+            valLoader = DataLoader(testset, batch_size=64)
+            loss, fid = test(model, valLoader)
+            return loss, {"fid": float(fid)}
 
     return evaluate
 
@@ -43,28 +48,40 @@ DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 def fit_config(server_round: int) -> Dict[str, Scalar]:
     """Return a configuration with static batch size and (local) epochs."""
     config = {
-        "epochs": 2,  # number of local epochs
+        "local_epochs": 2,  # number of local epochs
         "batch_size": 64,
     }
     return config
 
+
+def evaluate_fig(server_round: int):
+    val_steps = 5 if server_round < 4 else 10
+    val_batch_size = 64
+    val_config = {
+        "val_steps": val_steps,
+        "val_batch_size": val_batch_size
+    }
+
+    return val_config
+
+
 def client_fn(cid: str) -> CifarClient:
     net = Net().to(DEVICE)
-    train_loader, test_loader = load_data()
-    return CifarClient(net, train_loader, test_loader)
+    trainset, testset, _ = load_data()
+    return CifarClient(cid, net, trainset, testset, DEVICE)
+
 
 def main():
-    NUM_CLIENTS = 1
-    pool_size = 1
-    
+
     s = fl.server.server.FedAvg(
-        fraction_fit=1,
-        fraction_evaluate=1,
+        fraction_fit=0.2,
+        fraction_evaluate=0.2,
         min_fit_clients=2,
-        min_available_clients=2,
+        min_available_clients=10,
         min_evaluate_clients=2,
         evaluate_fn=get_evaluate_fn(),
         on_fit_config_fn=fit_config,
+        on_evaluate_config_fn=evaluate_fig
     )
     """
     fl.server.start_server(
@@ -75,10 +92,11 @@ def main():
     """
     fl.simulation.start_simulation(
         client_fn=client_fn,
-        num_clients=2,
-        config=fl.server.ServerConfig(num_rounds=4),
+        num_clients=10,
+        config=fl.server.ServerConfig(num_rounds=2),
         strategy=s,
     )
+
 
 if __name__ == "__main__":
     main()
