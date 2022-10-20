@@ -100,6 +100,6 @@ def test(discriminator, testloader, device: str):
             loss += criterion(outputs.view(-1), labels).item()
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
-            correct += (predicted.view(-1) == labels).sum().item()
+            correct += (predicted == labels).sum().item()
     accuracy = correct / total
     return loss, accuracy
