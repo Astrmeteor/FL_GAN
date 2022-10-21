@@ -21,7 +21,7 @@ def load_data():
     trainset = CIFAR10("/Users/tianying/Desktop/FL/data", train=True, download=True, transform=transform)
     testset = CIFAR10("/Users/tianying/Desktop/FL/data", train=False, download=True, transform=transform)
 
-    num_examples = {"trainset": {len(trainset)}, "testset": {len(testset)}}
+    num_examples = {"trainset_num": {len(trainset)}, "testset_num": {len(testset)}}
     return trainset, testset, num_examples
 
 
@@ -29,8 +29,8 @@ def load_partition(idx: int):
     """Load 1/10th of the training and test data to simulate a partition."""
     assert idx in range(10)
     trainset, testset, num_examples = load_data()
-    n_train = int(num_examples["trainset"] / 10)
-    n_test = int(num_examples["testset"] / 10)
+    n_train = int(len(trainset) / 10)
+    n_test = int(len(testset) / 10)
 
     train_parition = torch.utils.data.Subset(
         trainset, range(idx * n_train, (idx + 1) * n_train)
@@ -57,8 +57,8 @@ def train(net, trainloader, valloader, epochs, device):
             optimizer.step()
     net.to("cpu")
 
-    train_loss, train_fid = test(net, trainloader)
-    val_loss, val_fid = test(net, valloader)
+    train_loss, train_fid = test(net, trainloader, device=device)
+    val_loss, val_fid = test(net, valloader, device=device)
 
     results = {
         "train_loss": train_loss,
@@ -118,6 +118,8 @@ def set_parameters(model, parameters):
     params_dict = zip(model.state_dict().keys(), parameters)
     state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
     model.load_state_dict(state_dict, strict=True)
+    return model
+
 
 def calculate_fid(act1, act2):
      # calculate mean and covariance statistics

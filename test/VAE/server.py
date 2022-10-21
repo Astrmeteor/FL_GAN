@@ -7,7 +7,7 @@ from flwr.common.typing import Scalar
 import torch
 import numpy as np
 from client import CifarClient
-from utils import set_parameters, load_data, test
+from utils import set_parameters, load_data, test, load_partition
 from torch.utils.data import DataLoader
 import utils
 
@@ -19,7 +19,7 @@ def get_evaluate_fn():
                  ):
         if server_round % 2 == 0:
             model = Net()
-            set_parameters(model, parameters)  # Update model with the latest parameters
+            model = set_parameters(model, parameters)  # Update model with the latest parameters
             random_vector_for_generation = torch.normal(0, 1, (16, 10))
             generate_and_save_images(model, server_round, random_vector_for_generation)
 
@@ -48,7 +48,7 @@ DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 def fit_config(server_round: int) -> Dict[str, Scalar]:
     """Return a configuration with static batch size and (local) epochs."""
     config = {
-        "local_epochs": 2,  # number of local epochs
+        "local_epochs": 10,  # number of local epochs
         "batch_size": 64,
     }
     return config
@@ -67,17 +67,18 @@ def evaluate_fig(server_round: int):
 
 def client_fn(cid: str) -> CifarClient:
     net = Net().to(DEVICE)
-    trainset, testset, _ = load_data()
+    # trainset, testset, _ = load_data()
+    trainset, testset = load_partition(int(cid))
     return CifarClient(cid, net, trainset, testset, DEVICE)
 
 
 def main():
 
     s = fl.server.server.FedAvg(
-        fraction_fit=0.2,
-        fraction_evaluate=0.2,
-        min_fit_clients=2,
-        min_available_clients=3,
+        fraction_fit=1,
+        fraction_evaluate=0.5,
+        min_fit_clients=10,
+        min_available_clients=10,
         min_evaluate_clients=2,
         evaluate_fn=get_evaluate_fn(),
         on_fit_config_fn=fit_config,
@@ -92,8 +93,8 @@ def main():
     """
     fl.simulation.start_simulation(
         client_fn=client_fn,
-        num_clients=3,
-        config=fl.server.ServerConfig(num_rounds=2),
+        num_clients=10,
+        config=fl.server.ServerConfig(num_rounds=3),
         strategy=s,
     )
 

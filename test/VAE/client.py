@@ -23,10 +23,12 @@ class CifarClient(fl.client.NumPyClient):
         self.device = device,
         self.validation_split = validation_split
 
+    """
     def set_parameters(self, parameters):
         params_dict = zip(self.model.state_dict().keys(), parameters)
         state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
         self.model.load_state_dict(state_dict, strict=True)
+    """
 
     def get_parameters(self, config):
         print(f"[Client {self.cid}] get_parameters")
@@ -34,7 +36,7 @@ class CifarClient(fl.client.NumPyClient):
 
     def fit(self, parameters, config):
         print(f"[Client {self.cid}] fit, config: {config}")
-        set_parameters(self.model, parameters)
+        model = set_parameters(self.model, parameters)
         batch_size: int = config["batch_size"]
         epochs: int = config["local_epochs"]
 
@@ -44,11 +46,11 @@ class CifarClient(fl.client.NumPyClient):
         trainset = torch.utils.data.Subset(
             self.trainset, range(n_valset, len(self.trainset))
         )
-
+        print(f"Clinet {int(self.cid)}: dataset number {len(trainset)}")
         trainLoader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
         valLoader = DataLoader(valset, batch_size=batch_size)
 
-        results = train(self.model, trainLoader, valLoader, epochs, self.device)
+        results = train(model, trainLoader, valLoader, epochs, self.device)
 
         parameters_prime = self.get_parameters()
         num_examples = len(trainset)
@@ -57,10 +59,10 @@ class CifarClient(fl.client.NumPyClient):
 
     def evaluate(self, parameters, config):
         print(f"[Client {self.cid}] evaluate, config: {config}")
-        set_parameters(self.model, parameters)
+        model = set_parameters(self.model, parameters)
         steps : int = config["val_steps"]
         testloader = DataLoader(self.testset, batch_size=config["val_batch_size"])
-        loss, fid = test(self.model, testloader)
+        loss, fid = test(model, testloader)
 
         return float(loss), len(self.testset), {"fid": float(fid)}
 
