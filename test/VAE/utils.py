@@ -8,6 +8,7 @@ import numpy as np
 from scipy import linalg
 import tqdm
 from pytorch_fid import fid_score
+import pytorch_fid
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -85,14 +86,14 @@ def test(net, testloader, steps: int = None, device: str = "cpu"):
             total += len(images)
             if steps is not None and batch_idx == steps:
                 break
-
+    fid = calculate_fid(images, recon_images)
 
     if steps is None:
         loss = loss / len(testloader.dataset),
         fid = sum(fid) / len(testloader.dataset)
     else:
         loss = loss / total,
-        fid = sum(fid) / total
+        fid = fid / len(images)
     net.to("cpu")
     return loss, fid
 

@@ -77,7 +77,7 @@ def main():
         fraction_fit=0.2,
         fraction_evaluate=0.2,
         min_fit_clients=2,
-        min_available_clients=10,
+        min_available_clients=3,
         min_evaluate_clients=2,
         evaluate_fn=get_evaluate_fn(),
         on_fit_config_fn=fit_config,
@@ -92,7 +92,7 @@ def main():
     """
     fl.simulation.start_simulation(
         client_fn=client_fn,
-        num_clients=10,
+        num_clients=3,
         config=fl.server.ServerConfig(num_rounds=2),
         strategy=s,
     )
