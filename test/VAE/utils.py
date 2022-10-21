@@ -74,10 +74,10 @@ def test(net, testloader, steps: int = None, device: str = "cpu"):
     """Validate the network on the entire test set."""
     total, loss = 0, 0.0
     fid = 0
-    print(f"Starting evaluation ({testloader.dataset.filename})...")
+    print("Starting evaluation ...")
     net.eval()
     with torch.no_grad():
-        for batch_idx, (images, labels) in tqdm.tqdm(enumerate(testloader)):
+        for batch_idx, (images, labels) in enumerate(testloader):
             images = images.to(device)
             recon_images, mu, logvar = net(images)
             recon_loss = F.mse_loss(recon_images, images).to(device)
@@ -86,11 +86,12 @@ def test(net, testloader, steps: int = None, device: str = "cpu"):
             total += len(images)
             if steps is not None and batch_idx == steps:
                 break
-    fid = calculate_fid(images, recon_images)
 
+    fid = calculate_fid(images.detach().numpy().reshape(images.size(0), -1), recon_images.detach().numpy().reshape(recon_images.size(0), -1))
+    print(f"FID: {fid/len(images)}")
     if steps is None:
         loss = loss / len(testloader.dataset),
-        fid = sum(fid) / len(testloader.dataset)
+        fid = fid / len(images)
     else:
         loss = loss / total,
         fid = fid / len(images)
