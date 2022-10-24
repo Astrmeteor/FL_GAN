@@ -1,3 +1,5 @@
+import random
+
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 from torchvision.datasets import CIFAR10
@@ -7,8 +9,7 @@ from collections import OrderedDict
 import numpy as np
 from scipy import linalg
 import tqdm
-from pytorch_fid import fid_score
-import pytorch_fid
+from models import Net
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -26,51 +27,66 @@ def load_data():
 
 
 def load_partition(idx: int):
-    """Load 1/10th of the training and test data to simulate a partition."""
-    assert idx in range(10)
+    """Load idx th of the training and test data to simulate a partition."""
+    """idx means how many clients will join the learning, so that we split related subsets."""
+    # assert idx in range(10)
     trainset, testset, num_examples = load_data()
-    n_train = int(len(trainset) / 10)
-    n_test = int(len(testset) / 10)
+    n_train = int(len(trainset) / idx)
+    n_test = int(len(testset) / idx)
+
+    idx_start = random.randint(0, idx)
+
+    bound_train = ((idx_start + 1) * n_train) if ((idx_start + 1) * n_train) > len(trainset) else len(trainset)
+    bound_test = (idx_start + 1) * n_test if ((idx_start + 1) * n_test) > len(testset) else len(testset)
 
     train_parition = torch.utils.data.Subset(
-        trainset, range(idx * n_train, (idx + 1) * n_train)
+        trainset, range(idx_start * n_train, bound_train)
     )
     test_parition = torch.utils.data.Subset(
-        testset, range(idx * n_test, (idx + 1) * n_test)
+        testset, range(idx_start * n_test, bound_test)
     )
     return (train_parition, test_parition)
 
 
-def train(net, trainloader, valloader, epochs, device):
+def train(net, trainloader, valloader, epochs, device: str = "cpu"):
     """Train the network on the training set."""
     optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
     print("Starting training ...")
+    print(f"DEVICE: {device}")
     net.train()
+    LOSS = 0.0
+
     for _ in range(epochs):
         for images, _ in trainloader:
             optimizer.zero_grad()
             recon_images, mu, logvar = net(images)
-            recon_loss = F.mse_loss(recon_images, images).to(device)
+            recon_loss = F.mse_loss(recon_images, images)
             kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
             loss = recon_loss + 0.05 * kld_loss
+            LOSS += loss
             loss.backward()
             optimizer.step()
-    net.to("cpu")
+    # net.to("cpu")
+    print("Starting train_set test")
+    fid = calculate_fid(images.detach().numpy().reshape(images.size(0), -1),
+                        recon_images.detach().numpy().reshape(recon_images.size(0), -1))
+    train_fid = fid / len(images)
+    train_loss = LOSS.detach() / len(trainloader.dataset)
 
-    train_loss, train_fid = test(net, trainloader, device=device)
+    print("Starting validation_set test")
     val_loss, val_fid = test(net, valloader, device=device)
 
     results = {
-        "train_loss": train_loss,
-        "train_fid": train_fid,
-        "val_loss": val_loss,
-        "val_fid": val_fid
+        "train_loss": float(train_loss),
+        "train_fid": float(train_fid),
+        "val_loss": float(val_loss),
+        "val_fid": float(val_fid)
     }
-
+    print("Training end ...")
     return results
 
 
-def test(net, testloader, steps: int = None, device: str = "cpu"):
+def test(net, testloader, steps: int = None, device="cpu"):
     """Validate the network on the entire test set."""
     total, loss = 0, 0.0
     fid = 0
@@ -90,10 +106,10 @@ def test(net, testloader, steps: int = None, device: str = "cpu"):
     fid = calculate_fid(images.detach().numpy().reshape(images.size(0), -1), recon_images.detach().numpy().reshape(recon_images.size(0), -1))
     print(f"FID: {fid/len(images)}")
     if steps is None:
-        loss = loss / len(testloader.dataset),
+        loss = loss.detach() / len(testloader.dataset)
         fid = fid / len(images)
     else:
-        loss = loss / total,
+        loss = loss.detach() / total
         fid = fid / len(images)
     net.to("cpu")
     return loss, fid
@@ -114,11 +130,15 @@ def generate(net, image):
         return net.forward(image)
 
 
-def set_parameters(model, parameters):
-    params_dict = zip(model.state_dict().keys(), parameters)
-    state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
-    model.load_state_dict(state_dict, strict=True)
-    return model
+# def set_parameters(model, parameters):
+#    params_dict = zip(model.state_dict().keys(), parameters)
+#    state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
+#    model.load_state_dict(state_dict, strict=True)
+#    return model
+
+def get_model_params(model):
+    """Returns a model's parameters."""
+    return [val.cpu().numpy() for _, val in model.state_dict().items()]
 
 
 def calculate_fid(act1, act2):
@@ -144,3 +164,14 @@ def calculate_fid(act1, act2):
      fid = ssdiff + np.trace(sigma1 + sigma2 - 2.0 * covmean)
      return fid
 
+
+if __name__ == "__main__":
+    trainset, testset, _ = load_data()
+    net = Net()
+    n_valset = int(len(trainset) * 0.1)
+    valset = torch.utils.data.Subset(trainset, range(0, n_valset))
+    DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    trainLoader = DataLoader(trainset, batch_size=64, shuffle=True)
+    valLoader = DataLoader(valset, batch_size=64)
+    results = train(net, trainLoader, valLoader, 1, DEVICE)
+    print(results)

@@ -7,33 +7,40 @@ from flwr.common.typing import Scalar
 import torch
 import numpy as np
 from client import CifarClient
-from utils import set_parameters, load_data, test, load_partition
+from utils import load_data, test, load_partition
 from torch.utils.data import DataLoader
-import utils
+from collections import OrderedDict
 
-def get_evaluate_fn():
+
+def get_evaluate_fn(model: torch.nn.Module):
     """Return an evaluation function for server-side evaluation."""
 
     def evaluate(
             server_round: int, parameters: fl.common.NDArrays, config: Dict[str, Scalar]
                  ):
+
+        # model = Net()
+        # model = set_parameters(model, parameters)  # Update model with the latest parameters
+        params_dict = zip(model.state_dict().keys(), parameters)
+        state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
+        model.load_state_dict(state_dict, strict=True)
+
         if server_round % 2 == 0:
-            model = Net()
-            model = set_parameters(model, parameters)  # Update model with the latest parameters
             random_vector_for_generation = torch.normal(0, 1, (16, 10))
             generate_and_save_images(model, server_round, random_vector_for_generation)
 
-            _, testset, _ = load_data()
-            valLoader = DataLoader(testset, batch_size=64)
-            loss, fid = test(model, valLoader)
-            return loss, {"fid": float(fid)}
+        _, testset, _ = load_data()
+        valLoader = DataLoader(testset, batch_size=64)
+        DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        loss, fid = test(model, valLoader, device=DEVICE)
+        return loss, {"fid": float(fid)}
 
     return evaluate
 
 
 def generate_and_save_images(model, epoch, test_input):
     predictions = model.decode(test_input)
-    fig = plt.figure(figsize=(4, 4))
+    fig = plt.figure(figsize=(3, 3))
     for i in range(predictions.shape[0]):
         plt.subplot(4, 4, i + 1)
         img = np.transpose(predictions[i, :, :, ].detach().numpy(), axes=[1, 2, 0])
@@ -42,7 +49,6 @@ def generate_and_save_images(model, epoch, test_input):
         # tight_layout minimizes the overlap between 2 sub-plots
     plt.savefig('G_data/image_at_epoch_{:03d}.png'.format(epoch))
 
-DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 def fit_config(server_round: int) -> Dict[str, Scalar]:
@@ -66,42 +72,47 @@ def evaluate_fig(server_round: int):
 
 
 def client_fn(cid: str) -> CifarClient:
-    net = Net().to(DEVICE)
+    DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    # net = Net().to(DEVICE)
     # trainset, testset, _ = load_data()
     trainset, testset = load_partition(int(cid))
-    return CifarClient(cid, net, trainset, testset, DEVICE)
+    return CifarClient(cid, trainset, testset, device=DEVICE)
 
 
 def main():
+    num_client = 2
+
+    model = Net()
+
+    model_parameters = [val.cpu().numpy() for _, val in model.state_dict().items()]
 
     s = fl.server.server.FedAvg(
         fraction_fit=1,
-        fraction_evaluate=0.5,
-        min_fit_clients=10,
-        min_available_clients=10,
+        fraction_evaluate=1,
+        min_fit_clients=num_client,
+        min_available_clients=num_client,
         min_evaluate_clients=2,
-        evaluate_fn=get_evaluate_fn(),
+        evaluate_fn=get_evaluate_fn(model),
         on_fit_config_fn=fit_config,
-        on_evaluate_config_fn=evaluate_fig
+        on_evaluate_config_fn=evaluate_fig,
+        initial_parameters=fl.common.ndarrays_to_parameters(model_parameters)
     )
-    """
-    fl.server.start_server(
-        server_address="localhost:8080",
-        config=fl.server.ServerConfig(num_rounds=4), strategy=s,
 
+    fl.server.start_server(
+        server_address="10.1.2.102:8080",
+        config=fl.server.ServerConfig(num_rounds=1),
+        strategy=s
     )
     """
+
     fl.simulation.start_simulation(
         client_fn=client_fn,
-        num_clients=10,
-        config=fl.server.ServerConfig(num_rounds=3),
+        num_clients=num_client,
+        config=fl.server.ServerConfig(num_rounds=2),
         strategy=s,
     )
+    """
 
 
 if __name__ == "__main__":
     main()
-
-    #net = Net()
-    #train_loader, test_loader = utils.load_data()
-    #utils.train(net, train_loader, 1)
