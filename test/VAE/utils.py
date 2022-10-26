@@ -5,13 +5,20 @@ import torchvision.transforms as transforms
 from torchvision.datasets import CIFAR10
 import torch
 from torch.utils.data import DataLoader
-from collections import OrderedDict
 import numpy as np
 from scipy import linalg
-import tqdm
 from models import Net
+import time
 
-DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+my_device = ""
+
+if torch.backends.mps.is_built():
+    my_device = "mps"
+elif torch.cuda.is_available():
+    my_device = "cuda:0"
+else:
+    my_device = "cpu"
+DEVICE = torch.device(my_device)
 
 
 def load_data():
@@ -59,6 +66,7 @@ def train(net, trainloader, valloader, epochs, device: str = "cpu"):
     for _ in range(epochs):
         for images, _ in trainloader:
             optimizer.zero_grad()
+            images = images.to(device)
             recon_images, mu, logvar = net(images)
             recon_loss = F.mse_loss(recon_images, images)
             kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
@@ -68,8 +76,10 @@ def train(net, trainloader, valloader, epochs, device: str = "cpu"):
             optimizer.step()
     # net.to("cpu")
     print("Starting train_set test")
-    fid = calculate_fid(images.detach().numpy().reshape(images.size(0), -1),
-                        recon_images.detach().numpy().reshape(recon_images.size(0), -1))
+    # fid = calculate_fid(images.numpy().reshape(images.size(0), -1),
+    #                   recon_images.numpy().reshape(recon_images.size(0), -1))
+    fid = calculate_fid(images.cpu().detach().numpy().reshape(images.size(0), -1), recon_images.cpu().detach().numpy().reshape(recon_images.size(0), -1))
+
     train_fid = fid / len(images)
     train_loss = LOSS.detach() / len(trainloader.dataset)
 
@@ -103,7 +113,7 @@ def test(net, testloader, steps: int = None, device="cpu"):
             if steps is not None and batch_idx == steps:
                 break
 
-    fid = calculate_fid(images.detach().numpy().reshape(images.size(0), -1), recon_images.detach().numpy().reshape(recon_images.size(0), -1))
+    fid = calculate_fid(images.cpu().detach().numpy().reshape(images.size(0), -1), recon_images.cpu().detach().numpy().reshape(recon_images.size(0), -1))
     print(f"FID: {fid/len(images)}")
     if steps is None:
         loss = loss.detach() / len(testloader.dataset)
@@ -150,28 +160,102 @@ def calculate_fid(act1, act2):
      mu2 = np.mean(act2, axis=0)
 
      sigma2 = np.cov(act2, rowvar=False)
-     # mu2, sigma2 = act2.mean(axis=0), np.cov(act2, rowvar=False)
-     # calculate sum squared difference between means
 
+
+     # calculate sum squared difference between means
      ssdiff = np.sum((mu1 - mu2)**2.0)
+
      # calculate sqrt of product between cov
-     covmean = linalg.sqrtm(sigma1.dot(sigma2))
+     mual = sigma1.dot(sigma2)
+     #covmean = linalg.sqrtm(mual)
+     covmean = linalg.sqrtm(mual)
 
      # check and correct imaginary numbers from sqrt
      if np.iscomplexobj(covmean):
       covmean = covmean.real
      # calculate score
-     fid = ssdiff + np.trace(sigma1 + sigma2 - 2.0 * covmean)
-     return fid
+     trace = np.trace(sigma1 + sigma2 - 2.0 * covmean)
+     fid = ssdiff + trace
+
+     cpu_result = {
+         "mu1": mu1,
+         "sigma1": sigma1,
+         "mu2": mu2,
+         "sigma2": sigma2,
+         "ssdiff": ssdiff,
+         "mual": mual,
+         "covmean": covmean,
+         "trace": trace,
+         "fid": fid
+     }
+     return fid, cpu_result
+
+
+def calculate_fid_gpu(act1, act2):
+    # calculate mean and covariance statistics
+
+    mu1 = torch.mean(act1, dim=0)
+    sigma1 = torch.cov(act1.transpose(0, 1))
+
+    mu2 = torch.mean(act2, dim=0)
+
+    sigma2 = torch.cov(act2.transpose(0, 1))
+
+    # mu2, sigma2 = act2.mean(axis=0), np.cov(act2, rowvar=False)
+    # calculate sum squared difference between means
+
+    ssdiff = torch.sum((mu1 - mu2) ** 2.0)
+
+    # calculate sqrt of product between cov
+
+    mual = torch.mm(sigma1, sigma2)
+    covmean = torch.sqrt(mual + 1e-8)
+
+    trace = sigma1 + sigma2 - 2.0 * covmean
+    trace = torch.diagonal(trace, 0)
+    trace = torch.sum(trace)
+    # trace = torch.trace(sigma1 + sigma2 - 2.0 * covmean)
+
+    # calculate score
+    fid = ssdiff + trace
+
+    gpu_result = {
+        "mu1": mu1,
+        "sigma1": sigma1,
+        "mu2": mu2,
+        "sigma2": sigma2,
+        "ssdiff": ssdiff,
+        "mual": mual,
+        "covmean": covmean,
+        "trace": trace,
+        "fid": fid
+    }
+
+    return fid, gpu_result
 
 
 if __name__ == "__main__":
+    """
     trainset, testset, _ = load_data()
-    net = Net()
+    net = Net().to(DEVICE)
     n_valset = int(len(trainset) * 0.1)
     valset = torch.utils.data.Subset(trainset, range(0, n_valset))
-    DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
     trainLoader = DataLoader(trainset, batch_size=64, shuffle=True)
     valLoader = DataLoader(valset, batch_size=64)
+
     results = train(net, trainLoader, valLoader, 1, DEVICE)
     print(results)
+    """
+
+    x = np.random.random((60, 1000)).astype(np.float32)
+    y = np.random.random((60, 1000)).astype(np.float32)
+
+    s_1 = time.time()
+    cpu_fid, c_s = calculate_fid(x, y)
+    print(f"CPU FID: {cpu_fid} time: {time.time() - s_1}")
+
+    s_2 = time.time()
+    gpu_fid, g_s = calculate_fid_gpu(torch.tensor(x, ).to("mps"), torch.tensor(y).to("mps"))
+    print(f"GPU FID: {gpu_fid} time: {time.time() - s_2}")
+
