@@ -62,7 +62,7 @@ def load_partition(idx: int):
     return (train_parition, test_parition)
 
 
-def train(net, trainloader, valloader, epochs, device: str = "cpu"):
+def train(net, trainloader, valloader, epochs, dp: str = "", device: str = "cpu"):
     """Train the network on the training set."""
     optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
     # print("Starting training ...")
@@ -73,6 +73,12 @@ def train(net, trainloader, valloader, epochs, device: str = "cpu"):
     for _ in range(epochs):
         for images, _ in trainloader:
             optimizer.zero_grad()
+
+            if dp == "laplace":
+                images = Laplace_mech(images).float()
+            if dp == "gaussian":
+                images = Gaussian_mech(images)
+
             images = images.to(device)
             recon_images, mu, logvar = net(images)
             recon_loss = F.mse_loss(recon_images, images)
@@ -112,13 +118,19 @@ def train(net, trainloader, valloader, epochs, device: str = "cpu"):
     return results
 
 
-def test(net, testloader, steps: int = None, device="cpu"):
+def test(net, testloader, steps: int = None, dp : str = "", device: str = "cpu"):
     """Validate the network on the entire test set."""
     total, loss = 0, 0.0
     # print("Starting evaluation ...")
     net.eval()
     with torch.no_grad():
         for batch_idx, (images, labels) in enumerate(testloader):
+
+            if dp == "laplace":
+                images = Laplace_mech(images)
+            if dp == "gaussian":
+                images = Gaussian_mech(images)
+
             images = images.to(device)
             recon_images, mu, logvar = net(images)
             recon_loss = F.mse_loss(recon_images, images)
@@ -211,41 +223,29 @@ def calculate_fid(act1, act2):
      return fid
 
 
-def calculate_fid_gpu(act1, act2):
-    # calculate mean and covariance statistics
+def Laplace_mech(data, epsilon: float = 1.0):
+    loc = 0
+    sensitive = 1
+    scale = sensitive / epsilon
+    s = np.random.laplace(loc, scale, data.shape)
+    data = data + s
+    return data
 
-    mu1 = torch.mean(act1, dim=0)
-    sigma1 = torch.cov(act1.transpose(0, 1))
 
-    mu2 = torch.mean(act2, dim=0)
-
-    sigma2 = torch.cov(act2.transpose(0, 1))
-
-    # mu2, sigma2 = act2.mean(axis=0), np.cov(act2, rowvar=False)
-    # calculate sum squared difference between means
-
-    ssdiff = torch.sum((mu1 - mu2) ** 2.0)
-    # ssdiff = torch.sum(torch.abs(mu1 - mu2))
-
-    # calculate sqrt of product between cov
-
-    mual = torch.mm(sigma1, sigma2)
-    covmean = torch.sqrt(mual + 1e-8)
-
-    trace = sigma1 + sigma2 - 2.0 * covmean
-    trace = torch.diagonal(trace, 0)
-    trace = torch.sum(trace)
-    # trace = torch.trace(sigma1 + sigma2 - 2.0 * covmean)
-
-    # calculate score
-    fid = ssdiff + trace
-
-    return fid
+def Gaussian_mech(data, epsilon: float = 1.0):
+    loc = 0
+    sensitive = 1
+    delta = 1 / pow(len(data.data), 2) if pow(len(data.data), 2) > 10e6 else 10e-6
+    sigma = np.sqrt(2 * np.log(1.25 / delta)) * sensitive / epsilon
+    s = np.random.normal(loc, sigma, data.shape)
+    data.data = data + s
+    return data
 
 
 if __name__ == "__main__":
 
     # trainset, testset, _ = load_data()
+    dp = "laplace"
     trainset, testset = load_partition(3)
     print(len(trainset))
     print(len(testset))
@@ -256,8 +256,8 @@ if __name__ == "__main__":
     trainLoader = DataLoader(trainset, batch_size=64, shuffle=True)
     valLoader = DataLoader(valset, batch_size=64)
 
-    results = train(net, trainLoader, valLoader, 1, DEVICE)
-    loss, fid = test(net, valLoader, DEVICE)
+    results = train(net, trainLoader, valLoader, 1, dp, DEVICE)
+    loss, fid = test(net, valLoader, DEVICE, dp)
     print(results)
     """
 

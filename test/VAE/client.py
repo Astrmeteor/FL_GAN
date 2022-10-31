@@ -78,7 +78,8 @@ class CifarClient(fl.client.NumPyClient):
 def main():
     # Load model and data
     # net = Net()
-    trainset, testset = load_partition(2)
+    dp = "laplace"
+    trainset, testset = load_partition(2, dp)
     my_device = ""
 
     try:

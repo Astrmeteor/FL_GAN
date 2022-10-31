@@ -80,7 +80,8 @@ def generate_and_save_images(model, epoch, test_input):
     for i in range(predictions.shape[0]):
         plt.subplot(4, 4, i + 1)
         img = np.transpose(predictions[i, :, :, ].detach().numpy(), axes=[1, 2, 0])
-        plt.imshow((img/np.amax(img)*255).astype(np.uint8))
+        # plt.imshow((img/np.amax(img)*255).astype(np.uint8))
+        plt.imshow((img * 255).astype(np.uint8))
         plt.axis('off')
         # tight_layout minimizes the overlap between 2 sub-plots
     plt.savefig('G_data/image_at_epoch_{:03d}.png'.format(epoch))
@@ -124,7 +125,8 @@ def client_fn(cid: str) -> CifarClient:
 
     # net = Net().to(DEVICE)
     # trainset, testset, _ = load_data()
-    trainset, testset = load_partition(4)
+    dp = "laplace"
+    trainset, testset = load_partition(4, dp)
     return CifarClient(cid, trainset, testset, device=DEVICE)
 
 
@@ -156,7 +158,6 @@ def main():
         evaluate_metrics_aggregation_fn=weighted_average
     )
 
-    """
     fl.server.start_server(
         server_address="10.1.2.102:8080",
         config=fl.server.ServerConfig(num_rounds=1),
@@ -170,6 +171,7 @@ def main():
         config=fl.server.ServerConfig(num_rounds=2),
         strategy=strategy
     )
+    """
 
 
 if __name__ == "__main__":
