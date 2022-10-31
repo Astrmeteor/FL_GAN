@@ -39,7 +39,7 @@ class CifarClient(fl.client.NumPyClient):
     #    return [val.cpu().numpy() for _, val in self.model.state_dict().items()]
 
     def fit(self, parameters, config):
-        print(f"[Client {self.cid}] fit, config: {config}")
+        print(f"Global epoch {config['server_round']}: [Client {self.cid}] fit, config: {config}")
         model = self.set_parameters(parameters)
         batch_size: int = config["batch_size"]
         epochs: int = config["local_epochs"]
@@ -50,23 +50,27 @@ class CifarClient(fl.client.NumPyClient):
         trainset = torch.utils.data.Subset(
             self.trainset, range(n_valset, len(self.trainset))
         )
-        print(f"Client {self.cid}: dataset number {len(trainset)}")
+        print(f"Client {self.cid}: train dataset number {len(trainset)}, Starting training ...")
         trainLoader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
         valLoader = DataLoader(valset, batch_size=batch_size)
 
+        model.to(self.device)
         results = train(model, trainLoader, valLoader, epochs, self.device)
-
+        print(f"Client {self.cid}: Train FID: {results['fid']}, Validation FID: {results['val_fid']}. Training end ...")
         parameters_prime = get_model_params(model)
         num_examples = len(trainset)
 
         return parameters_prime, num_examples, results
 
     def evaluate(self, parameters, config):
-        print(f"[Client {self.cid}] evaluate, config: {config}")
+        print(f"Global epoch {config['server_round']}: [Client {self.cid}] evaluate, config: {config}")
         model = self.set_parameters(parameters)
         steps : int = config["val_steps"]
         testloader = DataLoader(self.testset, batch_size=config["val_batch_size"])
-        loss, fid = test(model, testloader)
+        model.to(self.device)
+        print(f"Client {self.cid}: test dataset number {len(testloader)}, Starting validation ...")
+        loss, fid = test(model, testloader, device=self.device)
+        print(f"Client {self.cid}: Validation end ...")
 
         return float(loss), len(self.testset), {"fid": float(fid)}
 
@@ -75,10 +79,19 @@ def main():
     # Load model and data
     # net = Net()
     trainset, testset = load_partition(2)
-    DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    my_device = ""
+
+    try:
+        if torch.backends.mps.is_built():
+            my_device = "mps"
+    except AttributeError:
+        if torch.cuda.is_available():
+            my_device = "cuda:0"
+        else:
+            my_device = "cpu"
 
     fl.client.start_numpy_client(server_address="10.1.2.102:8080",
-                                 client=CifarClient(cid=random.randint(1, 10), trainset=trainset, testset=testset, device=DEVICE))
+                                 client=CifarClient(cid=random.randint(1, 10), trainset=trainset, testset=testset, device=my_device))
 
 
 if __name__ == "__main__":
