@@ -7,9 +7,10 @@ import torch
 from torch.utils.data import DataLoader
 import numpy as np
 from scipy import linalg
-from models import Net
+from models import VAE
 import time
-
+import tqdm
+import torchvision
 my_device = ""
 
 try:
@@ -31,32 +32,32 @@ def load_data(dataset):
     if dataset == "mnist":
         data_transform.append(transforms.Normalize((0.1307,), (0.3081,)))
         data_transform = transforms.Compose(data_transform)
-        train = MNIST(root="./data", train=True, transform=data_transform, download=True)
-        test = MNIST(root="./data", train=False, transform=data_transform, download=True)
+        my_train = MNIST(root="./data", train=True, transform=data_transform, download=True)
+        my_test = MNIST(root="./data", train=False, transform=data_transform, download=True)
     elif dataset == "fashion-mnist":
         data_transform.append(transforms.Normalize((0.5,), (0.5,)))
         data_transform = transforms.Compose(data_transform)
-        train = FashionMNIST(root="./data", train=True, transform=data_transform, download=True)
-        test = FashionMNIST(root="./data", train=False, transform=data_transform, download=True)
+        my_train = FashionMNIST(root="./data", train=True, transform=data_transform, download=True)
+        my_test = FashionMNIST(root="./data", train=False, transform=data_transform, download=True)
     elif dataset == "cifar":
         data_transform.append(transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
         data_transform = transforms.Compose(data_transform)
-        train = CIFAR10(root="./data", train=True, transform=data_transform, download=True)
-        test = CIFAR10(root="./data", train=False, transform=data_transform, download=True)
+        my_train = CIFAR10(root="./data", train=True, transform=data_transform, download=True)
+        my_test = CIFAR10(root="./data", train=False, transform=data_transform, download=True)
     elif dataset == "stl":
         data_transform.append(transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2471, 0.2435, 0.2616]))
         data_transform = transforms.Compose(data_transform)
-        train = STL10(root="./data", split="unlabeled", transform=data_transform, download=True)
-        test = STL10(root="./data", split="test", transform=data_transform, download=True)
+        my_train = STL10(root="./data", split="unlabeled", transform=data_transform, download=True)
+        my_test = STL10(root="./data", split="test", transform=data_transform, download=True)
 
-    return train, test
+    return my_train, my_test
 
 
-def load_partition(idx: int):
+def load_partition(idx: int, my_dataset):
     """Load idx th of the training and test data to simulate a partition."""
     """idx means how many clients will join the learning, so that we split related subsets."""
     # assert idx in range(10)
-    trainset, testset, num_examples = load_data()
+    trainset, testset = load_data(my_dataset)
 
     # Each number of dataset
     n_train = int(len(trainset) / idx)
@@ -77,17 +78,26 @@ def load_partition(idx: int):
 
     return (train_parition, test_parition)
 
+features_out_hook = []
+def layer_hook(module, inp, out):
+    features_out_hook.append(out.data.cpu().numpy())
 
 def train(net, trainloader, valloader, epochs, dp: str = "", device: str = "cpu"):
     """Train the network on the training set."""
-    optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
+    # optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
+    optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
     # print("Starting training ...")
     # print(f"DEVICE: {device}")
     net.train()
     LOSS = 0.0
 
-    for _ in range(epochs):
-        for images, _ in trainloader:
+    train_fid = 0.0
+    start_time = time.time()
+
+    for e in tqdm.tqdm(range(epochs)):
+        loop = tqdm.tqdm((trainloader), total=len(trainloader), leave=False)
+        for images, labels in loop:
+
             optimizer.zero_grad()
 
             if dp == "laplace":
@@ -103,20 +113,18 @@ def train(net, trainloader, valloader, epochs, dp: str = "", device: str = "cpu"
             LOSS += loss
             loss.backward()
             optimizer.step()
-    # net.to("cpu")
-    # print("Starting train_set test")
-    fid = calculate_fid(images[:16].cpu().detach().numpy().reshape(16, -1),
-                        recon_images[:16].cpu().detach().numpy().reshape(16, -1))
+            loop.set_description(f"Epoch [{e}/{epochs}]")
+            loop.set_postfix(loss=loss.item())
 
-    # train_fid = fid / len(images)
-    train_fid = fid / 16
+    # Calculate FID
+
+    train_fid = compute_fid(images, recon_images, device)
+
     train_loss = LOSS.detach() / len(trainloader.dataset)
 
     # print("Starting validation_set test")
     val_loss, val_fid = test(net, valloader, device=device)
 
-    if math.isnan(train_fid):
-        train_fid = 0.0
 
     results = {
         "train_loss": float(train_loss),
@@ -147,26 +155,40 @@ def test(net, testloader, dp : str = "", device: str = "cpu"):
             kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
             loss += recon_loss + kld_loss
 
-    fid = calculate_fid(
-        images[:16].cpu().detach().numpy().reshape(16, -1),
-        recon_images[:16].cpu().detach().numpy().reshape(16, -1))
-
-    """
-    fid = calculate_fid_gpu(
-        images.view(images.shape[0], -1),
-        recon_images.view(recon_images.shape[0], -1)
-    )
-    """
-
     loss = loss.detach() / len(testloader.dataset)
     # fid = fid / len(images)
-    fid = fid / 16
+    fid = compute_fid(images, recon_images, device)
 
-    net.to("cpu")
-
-    if math.isnan(fid):
-        fid = 0.0
     return loss, fid
+
+
+def compute_fid(images, recon_images, device):
+    torch_size = torchvision.transforms.Resize([299, 299])
+
+    images_resize = torch_size(images).to(device)
+
+    fid_model = torchvision.models.inception_v3(weights=torchvision.models.Inception_V3_Weights.DEFAULT)
+    fid_model.to(device)
+
+    global features_out_hook
+    features_out_hook = []
+    hook1 = fid_model.dropout.register_forward_hook(layer_hook)
+    fid_model.eval()
+    fid_model(images_resize)
+    images_features = np.array(features_out_hook).squeeze()
+    hook1.remove()
+
+    features_out_hook = []
+    recon_images_resize = torch_size(recon_images).to(device)
+    hook2 = fid_model.dropout.register_forward_hook(layer_hook)
+    fid_model.eval()
+    fid_model(recon_images_resize)
+    recon_images_features = np.array(features_out_hook).squeeze()
+    hook2.remove()
+
+    fid = calculate_fid(images_features, recon_images_features)
+
+    return fid
 
 
 def sample(net):

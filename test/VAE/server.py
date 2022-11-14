@@ -1,7 +1,7 @@
 import flwr as fl
 from typing import Dict, List, Tuple, Union, Optional
 from flwr.common import Metrics
-from models import Net
+from models import VAE
 import matplotlib.pyplot as plt
 from flwr.common.typing import Scalar
 import torch
@@ -43,15 +43,47 @@ def get_evaluate_fn(model: torch.nn.Module):
 
         # model = Net()
         # model = set_parameters(model, parameters)  # Update model with the latest parameters
+        my_device = ""
+
+        try:
+            if torch.backends.mps.is_built():
+                my_device = "mps"
+        except AttributeError:
+            if torch.cuda.is_available():
+                my_device = "cuda:0"
+            else:
+                my_device = "cpu"
+
         params_dict = zip(model.state_dict().keys(), parameters)
         state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
         model.load_state_dict(state_dict, strict=True)
-
+        model.eval()
+        model.to(my_device)
         if server_round % 2 == 0:
-            random_vector_for_generation = torch.normal(0, 1, (16, 10))
-            generate_and_save_images(model, server_round, random_vector_for_generation)
 
-        _, testset, _ = load_data()
+            dataset = ["mnist", "fashion-mnist", "cifar", "stl"]
+            _, testset = load_partition(2, dataset[3])
+
+            valLoader = DataLoader(testset, batch_size=64, shuffle=True)
+            images = next(iter(valLoader))
+            recon_images, _, _ = model(images[0].to(my_device))
+
+            predictions = recon_images[:16]
+            fig = plt.figure(figsize=(3, 3))
+            for i in range(predictions.shape[0]):
+                plt.subplot(4, 4, i + 1)
+                img = np.transpose(predictions[i, :, :, ].cpu().detach().numpy(), axes=[1, 2, 0])
+                # plt.imshow((img/np.amax(img)*255).astype(np.uint8))
+                plt.imshow(img)
+                plt.axis('off')
+                # tight_layout minimizes the overlap between 2 sub-plots
+            plt.savefig('FL_G_data/image_at_epoch_{:03d}.png'.format(server_round))
+            plt.close()
+
+
+        # dataset = config["dataset"]
+        dataset = "stl"
+        _, testset = load_data(dataset)
         valLoader = DataLoader(testset, batch_size=64)
 
         my_device = ""
@@ -75,33 +107,38 @@ def get_evaluate_fn(model: torch.nn.Module):
 
 
 def generate_and_save_images(model, epoch, test_input):
-    predictions = model.decode(test_input)
+    predictions = model.decoder(model.fc3(test_input))
     fig = plt.figure(figsize=(3, 3))
     for i in range(predictions.shape[0]):
         plt.subplot(4, 4, i + 1)
         img = np.transpose(predictions[i, :, :, ].detach().numpy(), axes=[1, 2, 0])
         # plt.imshow((img/np.amax(img)*255).astype(np.uint8))
-        plt.imshow((img * 255).astype(np.uint8))
+        plt.imshow(img)
         plt.axis('off')
         # tight_layout minimizes the overlap between 2 sub-plots
     plt.savefig('G_data/image_at_epoch_{:03d}.png'.format(epoch))
+    plt.close()
 
 
 def fit_config(server_round: int) -> Dict[str, Scalar]:
     """Return a configuration with static batch size and (local) epochs."""
+    dp = ["laplace", "gaussian"]
     config = {
         "local_epochs": 10,  # number of local epochs
         "batch_size": 64,
-        "server_round": server_round
+        "server_round": server_round,
+        "dp": dp
     }
     return config
 
 
 def evaluate_fig(server_round: int):
     val_batch_size = 64
+    dataset = ["mnist", "fashion-mnist", "cifar", "stl"]
     val_config = {
         "val_batch_size": val_batch_size,
-        "server_round": server_round
+        "server_round": server_round,
+        "dataset": dataset[3]
     }
 
     return val_config
@@ -123,8 +160,9 @@ def client_fn(cid: str) -> CifarClient:
 
     # net = Net().to(DEVICE)
     # trainset, testset, _ = load_data()
-    dp = "laplace"
-    trainset, testset = load_partition(4, dp)
+
+    dataset = ["mnist", "fashion-mnist", "cifar", "stl"]
+    trainset, testset = load_partition(4, dataset[3])
     return CifarClient(cid, trainset, testset, device=DEVICE)
 
 
@@ -139,7 +177,8 @@ def weighted_average(metrics: List[Tuple[int, Metrics]]) -> Metrics:
 def main():
     num_client = 2
 
-    model = Net()
+    dataset_type = "stl"
+    model = VAE(dataset_type)
 
     model_parameters = [val.cpu().numpy() for _, val in model.state_dict().items()]
 
@@ -155,7 +194,7 @@ def main():
         initial_parameters=fl.common.ndarrays_to_parameters(model_parameters),
         evaluate_metrics_aggregation_fn=weighted_average
     )
-
+    """
     fl.server.start_server(
         server_address="10.1.2.102:8080",
         config=fl.server.ServerConfig(num_rounds=1),
@@ -169,7 +208,6 @@ def main():
         config=fl.server.ServerConfig(num_rounds=2),
         strategy=strategy
     )
-    """
 
 
 if __name__ == "__main__":
