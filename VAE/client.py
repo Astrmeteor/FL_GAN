@@ -68,7 +68,7 @@ class CifarClient(fl.client.NumPyClient):
         model = self.set_parameters(parameters)
         testloader = DataLoader(self.testset, batch_size=config["val_batch_size"])
         model.to(self.device)
-        print(f"Client {self.cid}: test dataset number {len(testloader)}, Starting validation ...")
+        print(f"Client {self.cid}: test dataset size {len(testloader)}, Starting validation ...")
         loss, fid = test(model, testloader, config["dp"], device=self.device)
         print(f"Client {self.cid}: Validation end ...")
 
@@ -78,7 +78,7 @@ class CifarClient(fl.client.NumPyClient):
 def main():
     # Load model and data
     # net = Net()
-    dp = "laplace"
+    # dp = "laplace"
     dataset = ["mnist", "fashion-mnist", "cifar", "stl"]
     trainset, testset = load_partition(2, dataset[3])
     my_device = ""

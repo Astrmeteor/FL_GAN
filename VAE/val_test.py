@@ -51,7 +51,7 @@ def train(net, trainloader, testloader, epochs, dp: str = "", device: str = "cpu
             # recon_loss = F.mse_loss(recon_images, images)
             recon_loss = F.binary_cross_entropy(recon_images, images, reduction='sum')
             kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-            loss = recon_loss + 0.05 * kld_loss
+            loss = recon_loss + * kld_loss
             LOSS += loss
             loss.backward()
             optimizer.step()
@@ -62,7 +62,6 @@ def train(net, trainloader, testloader, epochs, dp: str = "", device: str = "cpu
         #                      recon_images[:16].cpu().detach().numpy().reshape(16, -1))
 
         val_images, val_labels = next(iter(testloader))
-        del testloader
 
         recon_images, _, _ = net(val_images.to(device))
 
@@ -77,6 +76,7 @@ def train(net, trainloader, testloader, epochs, dp: str = "", device: str = "cpu
         fid_model.to(device)
 
         global features_out_hook
+
         features_out_hook = []
         hook1 = fid_model.dropout.register_forward_hook(layer_hook)
         fid_model.eval()
@@ -131,6 +131,9 @@ def train(net, trainloader, testloader, epochs, dp: str = "", device: str = "cpu
 
     print("Save central values ")
     np.save(f"Results/values_central_{epochs}.npy", values)
+
+    print("Save central weights")
+    torch.save(net.state_dict(), f"Results/weights_central_{epochs}.pt")
 
 features_out_hook = []
 def layer_hook(module, inp, out):

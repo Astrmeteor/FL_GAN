@@ -97,6 +97,8 @@ def train(net, trainloader, valloader, epochs, dp: str = "", device: str = "cpu"
     for e in tqdm.tqdm(range(epochs)):
         loop = tqdm.tqdm((trainloader), total=len(trainloader), leave=False)
         for images, labels in loop:
+            if loop.last_print_n == 2:
+                break
 
             optimizer.zero_grad()
 
@@ -109,7 +111,7 @@ def train(net, trainloader, valloader, epochs, dp: str = "", device: str = "cpu"
             recon_images, mu, logvar = net(images)
             recon_loss = F.mse_loss(recon_images, images)
             kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-            loss = recon_loss + 0.05 * kld_loss
+            loss = recon_loss + kld_loss
             LOSS += loss
             loss.backward()
             optimizer.step()
