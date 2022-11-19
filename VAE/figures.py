@@ -1,7 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-x = np.load("Results/stl/2/metircs/fid_loss_10.npy", allow_pickle=True)
+client_number = 2
+
+x = np.load("Results/stl/{}/metircs/fid_loss_10.npy".format(client_number), allow_pickle=True)
 
 
 fid_central = []
@@ -28,7 +30,7 @@ plt.xlabel("Epoch")
 plt.ylabel("FID")
 plt.legend()
 # plt.show()
-plt.savefig('Results/stl/2/Figures/fid_centralized.png', dpi=400)
+plt.savefig('Results/stl/{}/Figures/fid_centralized.png'.format(client_number), dpi=400)
 plt.close()
 
 figure2 = plt.figure()
@@ -52,7 +54,7 @@ plt.ylabel("FID")
 plt.legend(handles=handles, labels=labels, loc='upper right')
 plt.xticks(x2_ticks)
 plt.grid(visible="True", axis="x")
-plt.savefig('Results/stl/2/Figures/fid_distributed.png', dpi=400)
+plt.savefig('Results/stl/{}/Figures/fid_distributed.png'.format(client_number), dpi=400)
 plt.close()
 print("Saved Figures")
 # plt.show()
