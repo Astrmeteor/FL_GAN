@@ -51,7 +51,7 @@ def train(net, trainloader, testloader, epochs, dp: str = "", device: str = "cpu
             # recon_loss = F.mse_loss(recon_images, images)
             recon_loss = F.binary_cross_entropy(recon_images, images, reduction='sum')
             kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-            loss = recon_loss + * kld_loss
+            loss = recon_loss + kld_loss
             LOSS += loss
             loss.backward()
             optimizer.step()

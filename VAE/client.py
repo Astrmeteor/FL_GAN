@@ -17,16 +17,15 @@ class CifarClient(fl.client.NumPyClient):
             # model: Net,
             trainset: torchvision.datasets,
             testset: torchvision.datasets,
-            device: str,
-            validation_split: int = 0.1
+            device: str
+            # validation_split: int = 0.1
     ) -> None:
         self.cid = cid
         # self.model = model
         self.trainset = trainset
         self.testset = testset
         self.device = device
-        self.validation_split = validation_split
-
+        # self.validation_split = validation_split
 
     def set_parameters(self, parameters):
         model = VAE("stl")
@@ -45,21 +44,17 @@ class CifarClient(fl.client.NumPyClient):
         batch_size: int = config["batch_size"]
         epochs: int = config["local_epochs"]
 
-        n_valset = int(len(self.trainset) * self.validation_split)
-        valset = torch.utils.data.Subset(self.trainset, range(0, n_valset))
-
-        trainset = torch.utils.data.Subset(
-            self.trainset, range(n_valset, len(self.trainset))
-        )
+        # trainset = torch.utils.data.Subset(self.trainset, range(n_valset, len(self.trainset)))
+        trainset = self.trainset
         print(f"Client {self.cid}: train dataset number {len(trainset)}, Starting training ...")
-        trainLoader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
-        valLoader = DataLoader(valset, batch_size=batch_size)
+        trainLoader = DataLoader(trainset, batch_size=batch_size, shuffle=False)
+        # valLoader = DataLoader(valset, batch_size=batch_size)
 
         model.to(self.device)
-        results = train(model, trainLoader, valLoader, epochs, config["dp"], self.device)
-        print(f"Client {self.cid}: Train FID: {results['fid']}, Validation FID: {results['val_fid']}. Training end ...")
+        results = train(model, trainLoader, epochs, config["dp"], self.device)
+        print(f"Client {self.cid}: Train FID: {results['fid']}. Training end ...")
         parameters_prime = get_model_params(model)
-        num_examples = len(trainset)
+        num_examples = len(trainLoader)
 
         return parameters_prime, num_examples, results
 
@@ -67,10 +62,15 @@ class CifarClient(fl.client.NumPyClient):
         print(f"Global epoch {config['server_round']}: [Client {self.cid}] evaluate, config: {config}")
         model = self.set_parameters(parameters)
         testloader = DataLoader(self.testset, batch_size=config["val_batch_size"])
+
+        # n_valset = int(len(self.trainset) * self.validation_split)
+        # valset = torch.utils.data.Subset(self.trainset, range(0, n_valset))
+
         model.to(self.device)
         print(f"Client {self.cid}: test dataset size {len(testloader)}, Starting validation ...")
         loss, fid = test(model, testloader, config["dp"], device=self.device)
-        print(f"Client {self.cid}: Validation end ...")
+
+        print(f"Client {self.cid}: Test FID: {fid}, Test loss: {loss}. Validation end ...")
 
         return float(loss), len(self.testset), {"fid": float(fid)}
 

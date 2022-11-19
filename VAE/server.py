@@ -31,8 +31,6 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
             print(f"Saving round {server_round} aggregated_ndarrays...")
             np.savez(f"Results/stl/2/weights/FL_round_{server_round}_weights.npz", *aggregated_ndarrays)
 
-        np.save(f"Results/stl/2/metircs/fid_central_{server_round}.npy", aggregated_metrics)
-
         return aggregated_parameters, aggregated_metrics
 
 
@@ -73,8 +71,8 @@ def get_evaluate_fn(model: torch.nn.Module):
         for i in range(predictions.shape[0]):
             plt.subplot(4, 4, i + 1)
             img = np.transpose(predictions[i, :, :, ].cpu().detach().numpy(), axes=[1, 2, 0])
-
-            plt.imshow(img/2 + 0.5)
+            img = img / 2 + 0.5
+            plt.imshow(img)
             plt.axis('off')
 
         plt.savefig('Results/stl/2/FL_G_data/image_at_epoch_{:03d}_G.png'.format(server_round))
@@ -120,10 +118,10 @@ def fit_config(server_round: int) -> Dict[str, Scalar]:
     """Return a configuration with static batch size and (local) epochs."""
     dp = ["", "laplace", "gaussian"]
     config = {
-        "local_epochs": 1,  # number of local epochs
+        "local_epochs": 10,  # number of local epochs
         "batch_size": 64,
         "server_round": server_round,
-        "dp": dp[0]
+        "dp": dp[0],
     }
     return config
 
@@ -131,10 +129,12 @@ def fit_config(server_round: int) -> Dict[str, Scalar]:
 def evaluate_fig(server_round: int):
     val_batch_size = 64
     dataset = ["mnist", "fashion-mnist", "cifar", "stl"]
+    dp = ["", "laplace", "gaussian"]
     val_config = {
         "val_batch_size": val_batch_size,
         "server_round": server_round,
-        "dataset": dataset[3]
+        "dataset": dataset[3],
+        "dp": dp[0]
     }
 
     return val_config
@@ -163,11 +163,15 @@ def client_fn(cid: str) -> CifarClient:
 
 
 def weighted_average(metrics: List[Tuple[int, Metrics]]) -> Metrics:
-    # Multiply accuracy of each client by number of examples used
-    fid = [m["fid"] for number, m in metrics]
-    fid = np.average(fid)
+    # Multiply metrics of each client by number of examples used
+    # fid = [m["fid"] for number, m in metrics]
+    # fid = np.average(fid)
     # Aggregate and return average fid
-    return {"fid": fid}
+    met = {}
+    for i, m in enumerate(metrics):
+        met[i] = m[1]["fid"]
+    #return {"fid": fid}
+    return met
 
 
 def main():
@@ -190,6 +194,7 @@ def main():
         initial_parameters=fl.common.ndarrays_to_parameters(model_parameters),
         evaluate_metrics_aggregation_fn=weighted_average
     )
+
     """
     fl.server.start_server(
         server_address="10.1.2.102:8080",
@@ -198,12 +203,18 @@ def main():
     )
     """
 
-    fl.simulation.start_simulation(
+    history = fl.server.History()
+    num_rounds = 50
+    history = fl.simulation.start_simulation(
         client_fn=client_fn,
         num_clients=num_client,
-        config=fl.server.ServerConfig(num_rounds=1),
-        strategy=strategy
+        config=fl.server.ServerConfig(num_rounds=num_rounds),
+        strategy=strategy,
+
     )
+
+    # print(history)
+    np.save(f"Results/stl/2/metircs/fid_loss_{num_rounds}.npy", history)
 
 
 if __name__ == "__main__":

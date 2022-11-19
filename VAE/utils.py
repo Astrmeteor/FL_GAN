@@ -82,7 +82,7 @@ features_out_hook = []
 def layer_hook(module, inp, out):
     features_out_hook.append(out.data.cpu().numpy())
 
-def train(net, trainloader, valloader, epochs, dp: str = "", device: str = "cpu"):
+def train(net, trainloader, epochs, dp: str = "", device: str = "cpu"):
     """Train the network on the training set."""
     # optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
     optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
@@ -92,16 +92,12 @@ def train(net, trainloader, valloader, epochs, dp: str = "", device: str = "cpu"
     LOSS = 0.0
 
     train_fid = 0.0
-    start_time = time.time()
-
     for e in tqdm.tqdm(range(epochs)):
         loop = tqdm.tqdm((trainloader), total=len(trainloader), leave=False)
         for images, labels in loop:
-            if loop.last_print_n == 2:
-                break
-
+            # if loop.last_print_n == 2:
+            #    break
             optimizer.zero_grad()
-
             if dp == "laplace":
                 images = Laplace_mech(images).float()
             if dp == "gaussian":
@@ -118,23 +114,19 @@ def train(net, trainloader, valloader, epochs, dp: str = "", device: str = "cpu"
             loop.set_description(f"Epoch [{e}/{epochs}]")
             loop.set_postfix(loss=loss.item())
 
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=2.0)
+
     # Calculate FID
 
     train_fid = compute_fid(images, recon_images, device)
 
-    train_loss = LOSS.detach() / len(trainloader.dataset)
-
-    # print("Starting validation_set test")
-    val_loss, val_fid = test(net, valloader, device=device)
-
+    train_loss = LOSS.detach().item()
 
     results = {
         "train_loss": float(train_loss),
-        "fid": float(train_fid),
-        "val_loss": float(val_loss),
-        "val_fid": float(val_fid)
+        "fid": float(train_fid)
     }
-    # print("Training end ...")
     return results
 
 
@@ -157,7 +149,7 @@ def test(net, testloader, dp : str = "", device: str = "cpu"):
             kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
             loss += recon_loss + kld_loss
 
-    loss = loss.detach() / len(testloader.dataset)
+    loss = loss.detach().item()
     # fid = fid / len(images)
     fid = compute_fid(images, recon_images, device)
 
@@ -265,3 +257,16 @@ def Gaussian_mech(data, epsilon: float = 1.0):
     s = np.random.normal(loc, sigma, data.shape)
     data.data = data + s
     return data
+
+if __name__ =="__main__":
+    dataset = ["mnist", "fashion-mnist", "cifar", "stl"]
+    trainset, testset = load_data(dataset[3])
+    print(DEVICE)
+    net = VAE(dataset[3]).to(DEVICE)
+
+    trainLoader = DataLoader(trainset, batch_size=64, shuffle=False)
+    testLoader = DataLoader(testset, batch_size=64, shuffle=False)
+
+    epoch = 1
+    dp = ""
+    results = train(net, testLoader, epoch, dp, DEVICE)
