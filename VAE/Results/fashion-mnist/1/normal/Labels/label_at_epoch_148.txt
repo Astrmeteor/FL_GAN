@@ -1,0 +1,64 @@
+Coat
+Shirt
+Pullover
+Dress
+T-shirt/top
+Ankle boot
+Ankle boot
+Sandal
+Bag
+Shirt
+Ankle boot
+Bag
+Dress
+Dress
+Shirt
+Sneaker
+Dress
+Coat
+Shirt
+Shirt
+Pullover
+Coat
+Bag
+Coat
+T-shirt/top
+Trouser
+Sneaker
+Pullover
+Shirt
+Trouser
+Coat
+Trouser
+Coat
+Bag
+Pullover
+Pullover
+Pullover
+T-shirt/top
+Trouser
+Shirt
+Sandal
+Trouser
+Trouser
+Bag
+Coat
+Sandal
+T-shirt/top
+Trouser
+Ankle boot
+Sandal
+Trouser
+Shirt
+Coat
+Dress
+Pullover
+Coat
+T-shirt/top
+Pullover
+Sneaker
+Ankle boot
+Trouser
+Dress
+T-shirt/top
+Ankle boot
