@@ -25,10 +25,11 @@ def get_labels(dataset_name: str = "stl"):
         label_names = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"]
     return label_names
 
+
 def latent_distribution(mu, labels, info):
     e = TSNE(n_components=2, init="pca", learning_rate="auto").fit_transform(mu.detach().cpu())
     plt.figure()
-    plt.scatter(e[:, 0], e[:, 1], cmap='tab10')
+    plt.scatter(e[:, 0], e[:, 1], c=labels, cmap='tab10')
     plt.colorbar(ticks=np.arange(10), boundaries=np.arange(11)-.5)
     plt.savefig('Results/{}/{}/{}/Figures/Latent/latent_distribution_{}.png'.format(
         info["dataset"], info["client"], info["dp"], info["current_epoch"]), dpi=400)
@@ -85,9 +86,9 @@ def validation(model, testLoader, epochs, DEVICE):
 
     label_names = get_labels(DATASET)
 
-    val_labels = [label_names[i] for i in np.array(val_labels)]
+    val_labels_name = [label_names[i] for i in np.array(val_labels)]
 
-    np.savetxt("Results/{}/{}/{}/Labels/validation_labels.txt".format(DATASET, CLIENT, DP), val_labels, fmt="%s")
+    np.savetxt("Results/{}/{}/{}/Labels/validation_labels.txt".format(DATASET, CLIENT, DP), val_labels_name, fmt="%s")
 
     # Validation and draw related figures
     for e in tqdm.tqdm(range(epochs)):
@@ -163,6 +164,6 @@ if __name__ == "__main__":
     print(DEVICE)
     model = VAE(DATASET).to(DEVICE)
     testLoader = DataLoader(testset, batch_size=500, shuffle=True)
-    epoch = 10
+    epoch = 200
 
     results = validation(model, testLoader, epoch, DEVICE)
