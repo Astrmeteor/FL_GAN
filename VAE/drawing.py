@@ -1,3 +1,5 @@
+import argparse
+
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
@@ -7,6 +9,7 @@ from utils import calculate_fid, load_data
 from models import VAE
 from torch.utils.data import DataLoader
 import tqdm
+
 
 features_out_hook = []
 def layer_hook(module, inp, out):
@@ -35,27 +38,15 @@ def latent_distribution(mu, labels, info):
         info["dataset"], info["client"], info["dp"], info["current_epoch"]), dpi=400)
     plt.close()
 
-DATASET = ["mnist", "fashion-mnist", "cifar", "stl"]
-DATASET = DATASET[0]
-DP = ["normal", "laplace", "gaussian"]
-DP = DP[0]
-CLIENT = [1, 2, 3, 4, 5]
-CLIENT = CLIENT[0]
 
-my_device = ""
-try:
-    if torch.backends.mps.is_built():
-        my_device = "mps"
-except AttributeError:
-    if torch.cuda.is_available():
-        my_device = "cuda:0"
-    else:
-        my_device = "cpu"
+def validation(args, model, testLoader):
 
-DEVICE = torch.device(my_device)
+    epochs = args.epochs
+    DEVICE = args.device
+    DATASET = args.dataset
+    CLIENT = args.client
+    DP = args.dp
 
-def validation(model, testLoader, epochs, DEVICE):
-    global DATASET, CLIENT, DP
     val_images, val_labels = next(iter(testLoader))
     torch_size = torchvision.transforms.Resize([299, 299])
 
@@ -160,10 +151,70 @@ def validation(model, testLoader, epochs, DEVICE):
 
 
 if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(
+        description="Draw figures",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="mnist",
+        help="Dataset",
+    )
+
+    parser.add_argument(
+        "--dp",
+        type=str,
+        default="normal",
+        help="Disable privacy training and just train with vanilla type",
+    )
+
+    parser.add_argument(
+        "--client",
+        type=int,
+        default=1,
+        help="Number of clients, 1 for centralized, 2/3/4/5 for federated learning",
+    )
+
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        help="default GPU ID for model",
+    )
+
+    parser.add_argument(
+        "--test_batch_size",
+        type=int,
+        default=500,
+        metavar="TB",
+        help="input batch size for testing",
+    )
+
+    args = parser.parse_args()
+
+    try:
+        if torch.backends.mps.is_built():
+            args.device = "mps"
+        else:
+            if torch.cuda.is_available():
+                args.device = "cuda:0"
+            else:
+                args.device = "cpu"
+    except AttributeError:
+        if torch.cuda.is_available():
+            args.device = "cuda:0"
+        else:
+            args.device = "cpu"
+
+    DATASET = args.dataset
+    DP = args.dp
+    CLIENT = args.client
+    DEVICE = args.device
+
     _, testset = load_data(DATASET)
     print(DEVICE)
     model = VAE(DATASET).to(DEVICE)
-    testLoader = DataLoader(testset, batch_size=500, shuffle=True)
-    epoch = 200
-
-    results = validation(model, testLoader, epoch, DEVICE)
+    testLoader = DataLoader(testset, batch_size=args.test_batch_size, shuffle=True)
+    results = validation(args, model, testLoader)
