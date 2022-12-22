@@ -9,7 +9,12 @@ from utils import calculate_fid, load_data
 from models import VAE
 from torch.utils.data import DataLoader
 import tqdm
+import os
+import opacus.validators
+from opacus import PrivacyEngine
+import sys, warnings
 
+warnings.filterwarnings("ignore")
 
 features_out_hook = []
 def layer_hook(module, inp, out):
@@ -34,12 +39,16 @@ def latent_distribution(mu, labels, info):
     plt.figure()
     plt.scatter(e[:, 0], e[:, 1], c=labels, cmap='tab10')
     plt.colorbar(ticks=np.arange(10), boundaries=np.arange(11)-.5)
-    plt.savefig('Results/{}/{}/{}/Figures/Latent/latent_distribution_{}.png'.format(
-        info["dataset"], info["client"], info["dp"], info["current_epoch"]), dpi=400)
+
+    latent_save_path = f"Results/{info['dataset']}/{info['client']}/{info['dp']}/Figures/Latent"
+    if not os.path.exists(latent_save_path):
+        os.makedirs(latent_save_path)
+    latent_save_path += f"/latent_distribution_{info['current_epoch']}.png"
+    plt.savefig(latent_save_path, dpi=400)
     plt.close()
 
 
-def validation(args, model, testLoader):
+def validation(args, model, val_images, val_labels):
 
     epochs = args.epochs
     DEVICE = args.device
@@ -47,7 +56,7 @@ def validation(args, model, testLoader):
     CLIENT = args.client
     DP = args.dp
 
-    val_images, val_labels = next(iter(testLoader))
+    # val_images, val_labels = next(iter(testLoader))
     torch_size = torchvision.transforms.Resize([299, 299])
 
     re_val_images = val_images
@@ -58,12 +67,14 @@ def validation(args, model, testLoader):
 
     fid_model = torchvision.models.inception_v3(weights=torchvision.models.Inception_V3_Weights.DEFAULT)
     fid_model.to(DEVICE)
-
+    fid_model.zero_grad()
+    fid_model.eval()
     fid = []
 
     #  Save grand truth images
     grand_truth_images = val_images[:16]
     fig = plt.figure(figsize=(3, 3))
+
     for i in range(grand_truth_images.shape[0]):
         plt.subplot(4, 4, i + 1)
         img = np.transpose(grand_truth_images[i, :, :, ].cpu().detach().numpy(), axes=[1, 2, 0])
@@ -72,25 +83,53 @@ def validation(args, model, testLoader):
         else:
             plt.imshow(img, cmap="gray")
         plt.axis('off')
-    plt.savefig('Results/{}/{}/{}/G_data/grand_truth_images.png'.format(DATASET, CLIENT, DP))
+
+    grand_images_save_path = f"Results/{DATASET}/{CLIENT}/{DP}/G_data"
+    if not os.path.exists(grand_images_save_path):
+        os.makedirs(grand_images_save_path)
+
+    grand_images_save_path += f"/grand_truth_images.png"
+    plt.savefig(grand_images_save_path, dpi=400)
     plt.close()
 
     label_names = get_labels(DATASET)
 
     val_labels_name = [label_names[i] for i in np.array(val_labels)]
 
-    np.savetxt("Results/{}/{}/{}/Labels/validation_labels.txt".format(DATASET, CLIENT, DP), val_labels_name, fmt="%s")
+    label_save_path = f"Results/{DATASET}/{CLIENT}/{DP}/Labels"
+    if not os.path.exists(label_save_path):
+        os.makedirs(label_save_path)
+
+    label_save_path += f"/validation_labels.txt"
+    np.savetxt(label_save_path, val_labels_name, fmt="%s")
 
     # Validation and draw related figures
+    info = {
+        "dataset": DATASET,
+        "client": CLIENT,
+        "dp": DP
+    }
+
+    weights_save_path = f"Results/{info['dataset']}/{info['client']}/{info['dp']}/weights"
+    reconstruction_save_path = f"Results/{info['dataset']}/{info['client']}/{info['dp']}/G_data/Reconstruction"
+    sampling_save_path = f"Results/{info['dataset']}/{info['client']}/{info['dp']}/G_data/Sampling"
+    if not os.path.exists(weights_save_path):
+        os.makedirs(weights_save_path)
+    if not os.path.exists(reconstruction_save_path):
+        os.makedirs(reconstruction_save_path)
+    if not os.path.exists(sampling_save_path):
+        os.makedirs(sampling_save_path)
+
+    model.zero_grad()
+    model.eval()
     for e in tqdm.tqdm(range(epochs)):
-        info = {
-            "dataset": DATASET,
-            "client": CLIENT,
-            "dp": DP,
-            "current_epoch": e
-        }
-        PATH = "Results/{}/{}/{}/weights/weights_central_{}.pt".format(info["dataset"], info["client"], info["dp"], info["current_epoch"])
-        model.load_state_dict(torch.load(PATH))
+
+        info["current_epoch"] = e
+
+        PATH = weights_save_path + f"/weights_central_{info['current_epoch']}.pt"
+        model.load_state_dict(torch.load(PATH, map_location=torch.device(DEVICE)))
+        # model = torch.nn.DataParallel(model)
+
         recon_images, recon_mu, _ = model(val_images.to(DEVICE))
         latent_distribution(recon_mu, val_labels, info)
 
@@ -128,7 +167,9 @@ def validation(args, model, testLoader):
             else:
                 plt.imshow(img, cmap="gray")
             plt.axis('off')
-        plt.savefig('Results/{}/{}/{}/G_data/Reconstruction/reconstruction_images_at_epoch_{:03d}_G.png'.format(DATASET, CLIENT, DP, e))
+
+        recon_images_save_path = reconstruction_save_path + f"/reconstruction_images_at_epoch_{info['current_epoch']:03d}_G.png"
+        plt.savefig(recon_images_save_path, dpi=400)
         plt.close()
 
         # Draw sampling images
@@ -144,10 +185,17 @@ def validation(args, model, testLoader):
                 plt.imshow(img, cmap="gray")
             plt.axis('off')
             # tight_layout minimizes the overlap between 2 sub-plots
-        plt.savefig('Results/{}/{}/{}/G_data/Sampling/sampling_images_at_epoch_{:03d}.png'.format(DATASET, CLIENT, DP, e))
+
+        sample_images_save_path = sampling_save_path + f"/sampling_images_at_epoch_{info['current_epoch']:03d}.png"
+        plt.savefig(sample_images_save_path, dpi=400)
         plt.close()
     print("Save central FID")
-    np.save(f"Results/{DATASET}/{CLIENT}/{DP}/metrics/values_central_{epochs}.npy", fid)
+
+    metrics_save_pth = f"Results/{DATASET}/{CLIENT}/{DP}/metrics"
+    if not os.path.exists(metrics_save_pth):
+        os.makedirs(metrics_save_pth)
+    fid_save_path = metrics_save_pth + f"/values_central_{epochs}.npy"
+    np.save(fid_save_path, fid)
 
 
 if __name__ == "__main__":
@@ -156,6 +204,9 @@ if __name__ == "__main__":
         description="Draw figures",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+
+    parser.add_argument("--grad_sample_mode", type=str, default="hooks")
+
     parser.add_argument(
         "--dataset",
         type=str,
@@ -166,7 +217,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dp",
         type=str,
-        default="normal",
+        default="gaussian",
         help="Disable privacy training and just train with vanilla type",
     )
 
@@ -180,33 +231,83 @@ if __name__ == "__main__":
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
+        default="cpu",
         help="default GPU ID for model",
     )
 
     parser.add_argument(
         "--test_batch_size",
         type=int,
-        default=500,
+        default=64,
         metavar="TB",
         help="input batch size for testing",
     )
 
-    args = parser.parse_args()
+    parser.add_argument(
+        "-n",
+        "--epochs",
+        type=int,
+        default=200,
+        metavar="N",
+        help="number of epochs to load",
+    )
 
-    try:
-        if torch.backends.mps.is_built():
-            args.device = "mps"
-        else:
-            if torch.cuda.is_available():
-                args.device = "cuda:0"
-            else:
-                args.device = "cpu"
-    except AttributeError:
-        if torch.cuda.is_available():
-            args.device = "cuda:0"
-        else:
-            args.device = "cpu"
+    parser.add_argument(
+        "--secure_rng",
+        action="store_true",
+        default=False,
+        help="Enable Secure RNG to have trustworthy privacy guarantees. Comes at a performance cost",
+    )
+
+    parser.add_argument(
+        "--sigma",
+        type=float,
+        default=1.0,
+        metavar="S",
+        help="Noise multiplier",
+    )
+
+    parser.add_argument(
+        "-c",
+        "--max_per_sample_grad_norm",
+        type=float,
+        default=1.0,
+        metavar="C",
+        help="Clip per-sample gradients to this norm",
+    )
+
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=1e-3,
+        metavar="LR",
+        help="learning rate",
+    )
+
+    parser.add_argument(
+        "--beta1", type=float, default=0.5, help="beta1 for adam. default=0.5"
+    )
+
+    parser.add_argument(
+        "--beta2", type=float, default=0.999, help="beta2 for adam. default=0.999"
+    )
+
+    parser.add_argument(
+        "--weight_decay",
+        type=float,
+        default=1e-05,
+        metavar="WD",
+        help="weight decay",
+    )
+
+    parser.add_argument(
+        "--clip_per_layer",
+        action="store_true",
+        default=False,
+        help="Use static per-layer clipping with the same clipping threshold for each layer. Necessary for DDP. If `False` (default), uses flat clipping.",
+    )
+
+    args = parser.parse_args()
 
     DATASET = args.dataset
     DP = args.dp
@@ -215,6 +316,37 @@ if __name__ == "__main__":
 
     _, testset = load_data(DATASET)
     print(DEVICE)
-    model = VAE(DATASET).to(DEVICE)
+    model = VAE(DATASET, DEVICE)
+
+    model.to(DEVICE)
     testLoader = DataLoader(testset, batch_size=args.test_batch_size, shuffle=True)
-    results = validation(args, model, testLoader)
+    val_images, val_labels = next(iter(testLoader))
+
+    if args.dp == "gaussian":
+        model = opacus.validators.ModuleValidator.fix(model)
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay,
+                                     betas=(args.beta1, args.beta2))
+        if args.clip_per_layer:
+            # Each layer has the same clipping threshold. The total grad norm is still bounded by `args.max_per_sample_grad_norm`.
+            n_layers = len(
+                [(n, p) for n, p in model.named_parameters() if p.requires_grad]
+            )
+            max_grad_norm = [
+                                args.max_per_sample_grad_norm / np.sqrt(n_layers)
+                            ] * n_layers
+        else:
+            max_grad_norm = args.max_per_sample_grad_norm
+
+        privacy_engine = PrivacyEngine(secure_mode=args.secure_rng)
+        clipping = "per_layer" if args.clip_per_layer else "flat"
+        model, optimizer, testLoader = privacy_engine.make_private(
+            module=model,
+            data_loader=testLoader,
+            optimizer=optimizer,
+            noise_multiplier=args.sigma,
+            grad_sample_mode=args.grad_sample_mode,
+            max_grad_norm=max_grad_norm,
+            clipping=clipping
+        )
+
+    results = validation(args, model, val_images, val_labels)
