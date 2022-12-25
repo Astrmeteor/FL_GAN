@@ -1,12 +1,14 @@
 import torch
 import torch.nn as nn
 
+
 class EncoderModule(nn.Module):
     def __init__(self, input_channels, output_channels, stride, kernel, pad):
         super().__init__()
         self.conv = nn.Conv2d(input_channels, output_channels, kernel_size=kernel, padding=pad, stride=stride)
         self.bn = nn.BatchNorm2d(output_channels)
-        self.relu = nn.ReLU(inplace=True)
+        #self.relu = nn.ReLU(inplace=True)
+        self.relu = nn.LeakyReLU()
 
     def forward(self, x):
         return self.relu(self.bn(self.conv(x)))
@@ -32,9 +34,12 @@ class DecoderModule(nn.Module):
         self.convt = nn.ConvTranspose2d(input_channels, output_channels, kernel_size=stride, stride=stride)
         self.bn = nn.BatchNorm2d(output_channels)
         if activation == "relu":
-            self.activation = nn.ReLU(inplace=True)
+            #self.activation = nn.ReLU(inplace=True)
+            self.activation = nn.LeakyReLU()
         elif activation == "sigmoid":
             self.activation = nn.Sigmoid()
+        elif activation == "tanh":
+            self.activation = nn.Tanh()
 
     def forward(self, x):
         return self.activation(self.bn(self.convt(x)))
@@ -47,7 +52,8 @@ class Decoder(nn.Module):
         self.m1 = DecoderModule(256, 128, stride=1)
         self.m2 = DecoderModule(128, 64, stride=pooling_kernels[1])
         self.m3 = DecoderModule(64, 32, stride=pooling_kernels[0])
-        self.bottle = DecoderModule(32, color_channels, stride=1, activation="sigmoid")
+        # self.bottle = DecoderModule(32, color_channels, stride=1, activation="sigmoid")
+        self.bottle = DecoderModule(32, color_channels, stride=1, activation="tanh")
 
     def forward(self, x):
         out = x.view(-1, 256, self.decoder_input_size, self.decoder_input_size)
@@ -100,8 +106,10 @@ class VAE(nn.Module):
         self.history = {"loss": [], "val_loss": []}
 
     def _reparameterize(self, mu, logvar):
-        std = logvar.mul(0.5).exp_()
-        esp = torch.randn(*mu.size()).to(self.device)
+        #std = logvar.mul(0.5).exp_()
+        std = torch.exp(0.5 * logvar)
+        #esp = torch.randn(*mu.size()).to(self.device)
+        esp = torch.randn_like(std)
         z = mu + std * esp
         return z
 

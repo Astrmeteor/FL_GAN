@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 DATASET = ["mnist", "fashion-mnist", "cifar", "stl"]
-DATASET = DATASET[0]
+DATASET = DATASET[2]
 client_number = 1
 DP = ["normal", "gaussian"]
 DP = DP[1]
@@ -10,7 +10,7 @@ DP = DP[1]
 if client_number == 1:
     file_name = "values_central_200.npy"
 else:
-    file_name = "fid_loss_10.npy"
+    file_name = "fid_loss_200.npy"
 
 x = np.load("Results/{}/{}/{}/metrics/{}".format(DATASET, client_number, DP, file_name), allow_pickle=True)
 loss = np.load("Results/{}/{}/{}/metrics/loss_200.npy".format(DATASET, client_number, DP), allow_pickle=True)
@@ -112,7 +112,22 @@ else:
     plt.savefig('Results/{}/{}/{}/Figures/loss_centralized.png'.format(DATASET, client_number, DP), dpi=400)
     plt.close()
 
+    if DP == "gaussian":
+        # Epsilon
+        figure3 = plt.figure(figsize=(12, 8))
+        y_axis = epsilon
+        x_axis = np.arange(0, len(y_axis))
+        plt.plot(x_axis, y_axis, "r--", label="Epsilon FL")
+        plt.title("Epsilon Centralized")
+        x_ticks = np.arange(0, len(y_axis) + 1, 10)
+        plt.xticks(x_ticks)
+        plt.xlabel("Epoch")
+        plt.ylabel("Epsilon")
+        plt.legend()
+        plt.savefig('Results/{}/{}/{}/Figures/epsilon_fl.png'.format(DATASET, client_number, DP), dpi=400)
+        plt.close()
+
+        print("Saved Figures")
 
 
-    # print(x)
 

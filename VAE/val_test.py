@@ -2,7 +2,8 @@ import argparse
 
 import opacus.validators
 
-from models import VAE
+# from models import VAE
+from Models.vq_vae import VQVAE
 from utils import load_data
 import torch
 from torch.utils.data import DataLoader
@@ -23,12 +24,15 @@ def train(args, net, trainloader):
 
     device = args.device
     optimizer = torch.optim.Adam(net.parameters(), lr=args.lr, weight_decay=args.weight_decay, betas=(args.beta1, args.beta2))
-    gamma = 0.5
+    # gamma = 0.5
     # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
     LOSS = []
     EPSION = []
 
     if args.dp == "gaussian":
+        net = opacus.validators.ModuleValidator.fix(net)
+        optimizer = torch.optim.Adam(net.parameters(), lr=args.lr, weight_decay=args.weight_decay,
+                                     betas=(args.beta1, args.beta2))
         if args.clip_per_layer:
             # Each layer has the same clipping threshold. The total grad norm is still bounded by `args.max_per_sample_grad_norm`.
             n_layers = len(
@@ -50,7 +54,6 @@ def train(args, net, trainloader):
             max_grad_norm=max_grad_norm,
             clipping=clipping,
             grad_sample_mode=args.grad_sample_mode,
-
         )
 
     net.train()
@@ -64,22 +67,24 @@ def train(args, net, trainloader):
                 param_group["lr"] = lr
 
         for images, labels in loop:
-
             optimizer.zero_grad()
 
             images = images.to(device)
-            recon_images, mu, logvar = net(images)
-
-            recon_loss = F.mse_loss(recon_images, images)
-            kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-            loss = recon_loss + kld_loss
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+            #recon_images, mu, logvar = net(images)
+            recon_images, input, loss = net(images)
+            # loss = net.loss_function(recon_images, input, vq_loss)
+            #recon_loss = F.mse_loss(recon_images, images)
+            #kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+            #loss = recon_loss + kld_loss
+            loss["loss"].backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1, norm_type=2)
+            #torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
             optimizer.step()
-            temp_loss.append(loss.item())
+
+            temp_loss.append(loss["loss"].item())
 
             loop.set_description(f"Epoch [{e}/{args.epochs}]")
-            loop.set_postfix(loss=loss.item())
+            loop.set_postfix(loss=loss["loss"].item())
 
         if args.dp == "gaussian":
             epsilon = privacy_engine.accountant.get_epsilon(delta=args.delta)
@@ -109,9 +114,9 @@ def train(args, net, trainloader):
     np.save(loss_save_pth, LOSS)
 
     # Save epsilon
-    epsilon_save_path = metrics_save_pth + f"/epsilon_{args.epochs}.npy"
-    np.save(epsilon_save_path, EPSION)
-    print(666)
+    if args.dp == "gaussian":
+        epsilon_save_path = metrics_save_pth + f"/epsilon_{args.epochs}.npy"
+        np.save(epsilon_save_path, EPSION)
 
 
 if __name__ == "__main__":
@@ -143,7 +148,7 @@ if __name__ == "__main__":
         "-n",
         "--epochs",
         type=int,
-        default=200,
+        default=20,
         metavar="N",
         help="number of epochs to train",
     )
@@ -216,7 +221,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset",
         type=str,
-        default="mnist",
+        default="cifar",
         help="mnist, fashion-mnist, cifar, stl",
     )
 
@@ -265,11 +270,9 @@ if __name__ == "__main__":
     print(f"Device:{args.device}")
     print(f"Differential Privacy: {DP}")
 
-    net = VAE(DATASET, args.device).to(args.device)
-    # net.device = "cpu"
-    if DP == "gaussian":
-        net = opacus.validators.ModuleValidator.fix(net)
+    # net = VAE(DATASET, args.device).to(args.device)
+
+    net = VQVAE(3, 64, 512).to(args.device)
 
     trainLoader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True)
-    # testLoader = DataLoader(testset, batch_size=500, shuffle=True)
     results = train(args, net, trainLoader)
