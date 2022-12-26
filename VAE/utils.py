@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import DataLoader
 import numpy as np
 from scipy import linalg
-from models import VAE
+# from models import VAE
 import tqdm
 import torchvision
 from opacus import PrivacyEngine
@@ -269,7 +269,7 @@ class Fl_Client(fl.client.NumPyClient):
     def __init__(
             self,
             cid,
-            model: VAE,
+            model,
             # trainset: torchvision.datasets,
             # testset: torchvision.datasets,
             trainloader: DataLoader,

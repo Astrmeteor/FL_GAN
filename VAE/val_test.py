@@ -4,11 +4,11 @@ import opacus.validators
 
 # from models import VAE
 from Models.vq_vae import VQVAE
+from Models.gated_pixel_cnn import GatedPixelCNN
 from utils import load_data
 import torch
 from torch.utils.data import DataLoader
 import tqdm
-import torch.nn.functional as F
 from opacus import PrivacyEngine
 import numpy as np
 import os
@@ -27,6 +27,7 @@ def train(args, net, trainloader):
     # gamma = 0.5
     # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
     LOSS = []
+    CNN_LOSS = []
     EPSION = []
 
     if args.dp == "gaussian":
@@ -57,25 +58,27 @@ def train(args, net, trainloader):
         )
 
     net.train()
+
+    GatedPixelCNN_model = GatedPixelCNN(1, args.num_embeddings, 1).to(device)
+    optimizer_cnn = torch.optim.Adam(GatedPixelCNN_model.parameters(), lr=5e-4)
+
     for e in tqdm.tqdm(range(args.epochs)):
         loop = tqdm.tqdm((trainloader), total=len(trainloader), leave=False)
         temp_loss = []
-
+        temp_cnn_loss = []
         if args.lr_schedule == "cos":
             lr = args.lr * 0.5 * (1 + np.cos(np.pi * e / (args.epochs + 1)))
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr
 
         for images, labels in loop:
+            # VQVAE training
             optimizer.zero_grad()
 
             images = images.to(device)
             #recon_images, mu, logvar = net(images)
-            recon_images, input, loss = net(images)
-            # loss = net.loss_function(recon_images, input, vq_loss)
-            #recon_loss = F.mse_loss(recon_images, images)
-            #kld_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-            #loss = recon_loss + kld_loss
+            recon_images, encoding_inds, latent_shape, loss = net(images)
+
             loss["loss"].backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1, norm_type=2)
             #torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
@@ -83,35 +86,60 @@ def train(args, net, trainloader):
 
             temp_loss.append(loss["loss"].item())
 
+            # GatedPixelCNN traning
+            B, _, H, W = latent_shape
+            cnn_input = encoding_inds.view(B, 1, H, W)
+            cnn_output = GatedPixelCNN_model(cnn_input.float())
+            cnn_output = cnn_output.permute(0, 2, 3, 1).contiguous()
+            cnn_output = cnn_output.view(-1, 1)
+
+            cnn_loss = torch.nn.functional.binary_cross_entropy(cnn_output, encoding_inds.float())
+            optimizer_cnn.zero_grad()
+            cnn_loss.backward()
+            optimizer_cnn.step()
+
+            temp_cnn_loss.append(cnn_loss.item())
+
             loop.set_description(f"Epoch [{e}/{args.epochs}]")
-            loop.set_postfix(loss=loss["loss"].item())
+            loop.set_postfix(loss=loss["loss"].item(), CNN_loss=cnn_loss)
 
         if args.dp == "gaussian":
             epsilon = privacy_engine.accountant.get_epsilon(delta=args.delta)
             print(
                 f"Train Epoch: {e} \t"
-                f"Loss: {np.mean(temp_loss):.6f} "
+                f"Loss: {np.mean(temp_loss):.6f} CNN_Loss: {np.mean(temp_cnn_loss)}"
                 f"(ε = {epsilon:.2f}, δ = {args.delta})"
             )
             EPSION.append(epsilon.item())
         else:
-            print(f"Train Epoch: {e} \t Loss: {np.mean(temp_loss):.6f}")
+            print(f"Train Epoch: {e} \t Loss: {np.mean(temp_loss):.6f} CNN_Loss: {np.mean(temp_cnn_loss)}")
         LOSS.append(np.mean(temp_loss).item())
 
         print("Model has been saved.")
         # Save each epoch's model
-        weight_save_pth = f"Results/{DATASET}/{CLIENT}/{DP}/weights"
+        weight_save_pth = f"Results/{DATASET}/{CLIENT}/{DP}/weights/vqvae"
+        cnn_weight_save_pth = f"Results/{DATASET}/{CLIENT}/{DP}/weights/gatedpixelcnn"
         if not os.path.exists(weight_save_pth):
             os.makedirs(weight_save_pth)
         weight_save_pth += f"/weights_central_{e}.pt"
         torch.save(net.state_dict(), weight_save_pth)
 
+        if not os.path.exists(cnn_weight_save_pth):
+            os.makedirs(cnn_weight_save_pth)
+        weight_save_pth += f"/cnn_weights_central_{e}.pt"
+        torch.save(net.state_dict(), cnn_weight_save_pth)
+
     metrics_save_pth = f"Results/{DATASET}/{CLIENT}/{DP}/metrics"
     if not os.path.exists(metrics_save_pth):
         os.makedirs(metrics_save_pth)
+
     # Save loss
     loss_save_pth = metrics_save_pth + f"/loss_{args.epochs}.npy"
     np.save(loss_save_pth, LOSS)
+
+    # Save Cnn loss
+    cnn_loss_save_pth = metrics_save_pth + f"/cnn_loss_{args.epochs}.npy"
+    np.save(cnn_loss_save_pth, CNN_LOSS)
 
     # Save epsilon
     if args.dp == "gaussian":
@@ -205,7 +233,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--device",
         type=str,
-        default="cpu",
+        default="mps",
         help="default GPU ID for model",
     )
 
@@ -221,14 +249,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset",
         type=str,
-        default="cifar",
+        default="mnist",
         help="mnist, fashion-mnist, cifar, stl",
     )
 
     parser.add_argument(
         "--dp",
         type=str,
-        default="gaussian",
+        default="normal",
         help="Disable privacy training and just train with vanilla type",
     )
 
@@ -257,6 +285,23 @@ if __name__ == "__main__":
         "--lr_schedule", type=str, choices=["constant", "cos"], default="cos"
     )
 
+    parser.add_argument(
+        "-D",
+        "--embedding_dim",
+        type=int,
+        default=64,
+        help="Embedding dimention"
+    )
+
+    parser.add_argument(
+        "-K",
+        "--num_embeddings",
+        type=int,
+        default=512,
+        help="Embedding dimention"
+    )
+
+
     args = parser.parse_args()
 
     DATASET = args.dataset
@@ -272,7 +317,7 @@ if __name__ == "__main__":
 
     # net = VAE(DATASET, args.device).to(args.device)
 
-    net = VQVAE(3, 64, 512).to(args.device)
-
     trainLoader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True)
+    # VAVAE(shape, D, K)
+    net = VQVAE(next(iter(trainLoader))[0].shape[1], args.embedding_dim, args.num_embeddings).to(args.device)
     results = train(args, net, trainLoader)

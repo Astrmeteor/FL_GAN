@@ -51,9 +51,11 @@ class VectorQuantizer(nn.Module):
         vq_loss = commitment_loss * self.beta + embedding_loss
 
         # Add the residue back to the latents
+        # Straight Through Estimator
         quantized_latents = latents + (quantized_latents - latents).detach()
 
-        return quantized_latents.permute(0, 3, 1, 2).contiguous(), vq_loss  # [B x D x H x W]
+        return quantized_latents.permute(0, 3, 1, 2).contiguous(), vq_loss, encoding_inds  # [B x D x H x W]
+
 
 class ResidualLayer(nn.Module):
 
@@ -87,6 +89,7 @@ class VQVAE(BaseVAE):
         self.num_embeddings = num_embeddings
         self.img_size = img_size
         self.beta = beta
+        self.out_channels = in_channels
 
         modules = []
         if hidden_dims is None:
@@ -159,7 +162,7 @@ class VQVAE(BaseVAE):
         modules.append(
             nn.Sequential(
                 nn.ConvTranspose2d(hidden_dims[-1],
-                                   out_channels=3,
+                                   out_channels=self.out_channels,  ### 3
                                    kernel_size=4,
                                    stride=2, padding=1),
                 nn.Tanh()))
@@ -189,10 +192,11 @@ class VQVAE(BaseVAE):
 
     def forward(self, input: Tensor, **kwargs) -> List[Tensor]:
         encoding = self.encode(input)[0]
-        quantized_inputs, vq_loss = self.vq_layer(encoding)
+        quantized_inputs, vq_loss, encoding_inds = self.vq_layer(encoding)
+        latent_shape = quantized_inputs.shape
         loss = self.loss_function(self.decode(quantized_inputs), input, vq_loss)
         # return [self.decode(quantized_inputs), input, vq_loss]
-        return [self.decode(quantized_inputs), input, loss]
+        return [self.decode(quantized_inputs), encoding_inds, latent_shape, loss]
 
     def loss_function(self,
                       *args,
