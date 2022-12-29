@@ -6,7 +6,6 @@ import torch
 from torch.utils.data import DataLoader
 import numpy as np
 from scipy import linalg
-# from models import VAE
 import tqdm
 import torchvision
 from opacus import PrivacyEngine

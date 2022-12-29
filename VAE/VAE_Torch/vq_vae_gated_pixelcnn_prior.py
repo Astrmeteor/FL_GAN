@@ -145,9 +145,12 @@ def dequantize(x, dequantize=True, reverse=False, alpha=.1):
         return torch.log(p) - torch.log(1 - p)
 
 
-def train_vq_vae_with_gated_pixelcnn_prior(args, train_data, test_data):
+def train_vq_vae_with_gated_pixelcnn_prior(args, train_set, validation_set, test_set):
     """
-    train_data: An (n_train, 32, 32, 3) uint8 numpy array of color images with values in [0, 255]
+    args: parameters for code
+    train_set
+    validation_set
+    test_set
 
     Returns
     - a (# of training iterations,) numpy array of VQ-VAE train losess evaluated every minibatch
@@ -160,10 +163,10 @@ def train_vq_vae_with_gated_pixelcnn_prior(args, train_data, test_data):
     """
     start_time = time.time()
     if args.dataset == "mnist" or args.dataset == "fashion-mnist":
-        N, H, W = train_data.data.shape
+        N, H, W = train_set.dataset.data.shape
         C = 1
     else:
-        N, H, W, C = train_data.data.shape
+        N, H, W, C = train_set.dataset.data.shape
 
     batch_size = args.batch_size
     dataset_params = {
@@ -172,8 +175,9 @@ def train_vq_vae_with_gated_pixelcnn_prior(args, train_data, test_data):
     }
 
     print("[INFO] Creating model and data loaders")
-    train_loader = torch.utils.data.DataLoader(train_data, **dataset_params)
-    test_loader = torch.utils.data.DataLoader(test_data, **dataset_params)
+    train_loader = torch.utils.data.DataLoader(train_set, **dataset_params)
+    validation_loader = torch.utils.data.DataLoader(validation_set, **dataset_params)
+    test_loader = torch.utils.data.DataLoader(test_set, **dataset_params)
 
     # Model
     n_epochs_vae = args.epochs
@@ -231,8 +235,10 @@ def train_vq_vae_with_gated_pixelcnn_prior(args, train_data, test_data):
         loss_fct = model.get_vae_loss if not prior_only else model.get_pixelcnn_prior_loss
 
         train_losses = []
+        test_losses = []
+        validate_losses = []
         # Initialization loss for test
-        test_losses = [get_batched_loss(args, test_loader, model, loss_fct, prior_only, loss_triples=False)]
+        # test_losses = [get_batched_loss(args, test_loader, model, loss_fct, prior_only, loss_triples=False)]
         if args.dp == "gaussian":
             EPSILON = []
 
@@ -240,8 +246,8 @@ def train_vq_vae_with_gated_pixelcnn_prior(args, train_data, test_data):
             epoch_start = time.time()
             loop = tqdm.tqdm((train_loader), total=len(train_loader), leave=False)
             for images, labels in loop:
-                # if loop.last_print_n == 1:
-                #    break
+                if loop.last_print_n == 1:
+                    break
 
                 optimizer.zero_grad()
                 batch = images.to(device)
@@ -256,12 +262,16 @@ def train_vq_vae_with_gated_pixelcnn_prior(args, train_data, test_data):
                 loop.set_description(f"Epoch [{epoch}/{args.epochs}]")
                 loop.set_postfix(loss=loss.item())
 
+            validate_loss = get_batched_loss(args, validation_loader, vq_vae, loss_fct, prior_only, loss_triples=False)
+            validate_losses.append(validate_loss)
+
             test_loss = get_batched_loss(args, test_loader, vq_vae, loss_fct, prior_only, loss_triples=False)
             test_losses.append(test_loss)
 
             print(
                 f"[{100*(epoch+1)/no_epochs:.2f}%] Epoch {epoch + 1} - "
                 f"Train loss: {np.mean(train_losses):.2f} - "
+                f"Validate loss: {validate_loss:.2f} - "
                 f"Test loss: {test_loss:.2f} - "
                 f"Time elapsed: {time.time() - epoch_start:.2f}", end=""
             )
@@ -286,18 +296,25 @@ def train_vq_vae_with_gated_pixelcnn_prior(args, train_data, test_data):
                     os.makedirs(cnn_weight_save_pth)
                 weight_save_pth = cnn_weight_save_pth + f"/cnn_weights_after_trained_{epoch + 1}.pt"
                 torch.save(model.state_dict(), weight_save_pth)
+        if not prior_only:
+            metrics = {
+                "vq_vae_train_losses": np.array(train_losses),
+                "vq_vae_validate_losses": np.array(validate_losses),
+                "vq_vae_test_losses": np.array(test_losses)
+            }
+        else:
+            metrics = {
+                "pixcel_cnn_train_losses": np.array(train_losses),
+                "pixcel_cnn_validate_losses": np.array(validate_losses),
+                "pixcel_cnn_test_losses": np.array(test_losses)
+            }
 
         if DP == "gaussian":
-            return np.array(train_losses), np.array(test_losses), np.array(EPSILON)
-        else:
-            return np.array(train_losses), np.array(test_losses)
+            metrics["epsilon"] = np.array(EPSILON)
+        return metrics
 
-    if args.dp == "gaussian":
-        vq_vae_train_losses, vq_vae_test_losses, epsilon = train(args, vq_vae, n_epochs_vae)
-        pixel_cnn_train_losses, pixel_cnn_test_losses, epsilon = train(args, vq_vae, n_epochs_cnn, prior_only=True)
-    else:
-        vq_vae_train_losses, vq_vae_test_losses = train(args, vq_vae, n_epochs_vae)
-        pixel_cnn_train_losses, pixel_cnn_test_losses = train(args, vq_vae, n_epochs_cnn, prior_only=True)
+    vq_vqe_metrics = train(args, vq_vae, n_epochs_vae)
+    pixel_cnn_metrics = train(args, vq_vae, n_epochs_cnn, prior_only=True)
 
     """
     # Utility methods
@@ -355,8 +372,4 @@ def train_vq_vae_with_gated_pixelcnn_prior(args, train_data, test_data):
     # print("Samples", samples.shape)
     # print("Pairs", pairs.shape)
 
-    if args.dp == "gaussian":
-        return vq_vae_train_losses, vq_vae_test_losses, pixel_cnn_train_losses, pixel_cnn_test_losses, \
-               epsilon
-    else:
-        return vq_vae_train_losses, vq_vae_test_losses, pixel_cnn_train_losses, pixel_cnn_test_losses
+    return {**vq_vqe_metrics, **pixel_cnn_metrics}

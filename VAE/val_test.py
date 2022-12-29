@@ -1,10 +1,12 @@
 import argparse
 
+import torch
+
 from VAE_Torch.vq_vae_gated_pixelcnn_prior import train_vq_vae_with_gated_pixelcnn_prior
 from utils import load_data
 import numpy as np
 import os
-
+import math
 
 def train(args, trainset, testset):
     """Train the network on the training set."""
@@ -12,35 +14,26 @@ def train(args, trainset, testset):
     DATASET = args.dataset
     DP = args.dp
     CLIENT = args.client
-    if DP == "gaussian":
-        vq_vae_train_losses, vq_vae_test_losses, pixel_cnn_train_losses, pixel_cnn_test_losses = train_vq_vae_with_gated_pixelcnn_prior(args, trainset, testset)
-    else:
-        vq_vae_train_losses, vq_vae_test_losses, pixel_cnn_train_losses, pixel_cnn_test_losses = train_vq_vae_with_gated_pixelcnn_prior(args, trainset, testset)
+
+    trainset_len = len(trainset)
+    bound = int(math.floor(trainset_len * args.split_rate))
+
+    train_set = torch.utils.data.Subset(trainset, range(bound))
+    validation_set = torch.utils.data.Subset(trainset, range(bound, trainset_len))
+
+    metrics = train_vq_vae_with_gated_pixelcnn_prior(args, train_set, validation_set, testset)
+
+    #else:
+    #    vq_vae_train_losses, vq_vae_test_losses, pixel_cnn_train_losses, \
+    #    pixel_cnn_test_losses = train_vq_vae_with_gated_pixelcnn_prior(args, trainset, testset, validatset)
 
     metrics_save_pth = f"Results/{DATASET}/{CLIENT}/{DP}/metrics"
     if not os.path.exists(metrics_save_pth):
         os.makedirs(metrics_save_pth)
 
-    # Save VQVAE Train Loss
-    vqvqe_train_loss_save_pth = metrics_save_pth + f"/vqvqe_train_loss_{args.epochs}.npy"
-    np.save(vqvqe_train_loss_save_pth, vq_vae_train_losses)
-
-    # Save VQVAE Test Loss
-    vqvae_test_loss_save_pth = metrics_save_pth + f"/vqvae_test_loss_{args.epochs}.npy"
-    np.save(vqvae_test_loss_save_pth, vq_vae_test_losses)
-
-    # Save PixelCNN Train Loss
-    cnn_train_loss_save_pth = metrics_save_pth + f"/cnn_train_loss_{args.epochs}.npy"
-    np.save(cnn_train_loss_save_pth, pixel_cnn_train_losses)
-
-    # Save PixelCNN Test Loss
-    cnn_test_loss_save_pth = metrics_save_pth + f"/cnn_test_loss_{args.epochs}.npy"
-    np.save(cnn_test_loss_save_pth, pixel_cnn_test_losses)
-
-    # Save epsilon
-    if args.dp == "gaussian":
-        epsilon_save_path = metrics_save_pth + f"/epsilon_{args.epochs}.npy"
-        np.save(epsilon_save_path, epsilon)
+    # Save Metrics
+    vqvqe_train_loss_save_pth = metrics_save_pth + f"/metrics_dict_{args.epochs}.npy"
+    np.save(vqvqe_train_loss_save_pth, metrics)
 
 
 def args_function():
@@ -133,15 +126,6 @@ def args_function():
         help="default GPU ID for model",
     )
 
-    """
-    parser.add_argument(
-        "--save_model",
-        action="store_true",
-        default=False,
-        help="Save the trained model",
-    )
-    """
-
     parser.add_argument(
         "--dataset",
         type=str,
@@ -196,6 +180,14 @@ def args_function():
         default=512, #512, 128
         help="Embedding dimention"
     )
+
+    parser.add_argument(
+        "--split_rate",
+        type=float,
+        default=0.8,
+        help="Splite ratio for train set and test set"
+    )
+
 
     args = parser.parse_args()
 
