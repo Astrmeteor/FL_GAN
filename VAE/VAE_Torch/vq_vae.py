@@ -1,8 +1,8 @@
 import time
 
 import torch.nn as nn
-
-from .utils import *
+import torch.nn.functional as F
+from .vqe_utils import *
 from .vae import Encoder, Decoder
 
 
@@ -159,7 +159,7 @@ class Decoder(nn.Module):
 
 
 class VQVAE(nn.Module):
-    def __init__(self, K=128, D=256, channel=3):
+    def __init__(self, K=128, D=256, channel=3, device="cpu"):
         super().__init__()
         self.K = K
         self.D = D
@@ -167,7 +167,7 @@ class VQVAE(nn.Module):
         self.codebook = VectorQuantizer(K=K, D=D)
         self.encoder = Encoder(D=D, in_channel=channel)
         self.decoder = Decoder(D=D, out_channel=channel)
-        self.pixelcnn_prior = PixelRCNN(K=K)
+        self.pixelcnn_prior = PixelRCNN(K=K).to(device)
         self.pixelcnn_loss_fct = nn.CrossEntropyLoss()
 
     def forward(self, x, prior_only=False):
