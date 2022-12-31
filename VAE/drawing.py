@@ -1,3 +1,9 @@
+"""
+load the weights of models and draw figures
+latent space
+FID
+Sampling and reconstruction
+"""
 import argparse
 
 import torch
@@ -6,33 +12,20 @@ import numpy as np
 from sklearn.manifold import TSNE
 import torchvision
 from utils import calculate_fid, load_data
-from models import VAE
-from Models.vq_vae import VQVAE
 from torch.utils.data import DataLoader
 import tqdm
 import os
 import opacus.validators
 from opacus import PrivacyEngine
-import sys, warnings
+import warnings
+
+from VAE_Torch.vq_vae_gated_pixelcnn_prior import Improved_VQVAE
 
 warnings.filterwarnings("ignore")
 
 features_out_hook = []
 def layer_hook(module, inp, out):
     features_out_hook.append(out.data.cpu().numpy())
-
-
-def get_labels(dataset_name: str = "stl"):
-    if dataset_name == "stl":
-        label_names = ["airplane", "bird", "car", "cat", "deer", "dog", "horse", "monkey", "ship", "truck"]
-    elif dataset_name == "cifar":
-        label_names = ["airplane", "automobile", "bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck"]
-    elif dataset_name == "fashion-mnist":
-        label_names = ["T-shirt/top", "Trouser", "Pullover", "Dress", "Coat", "Sandal", "Shirt", "Sneaker", "Bag",
-                       "Ankle boot"]
-    elif dataset_name == "mnist":
-        label_names = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"]
-    return label_names
 
 
 def latent_distribution(mu, labels, info):
@@ -58,21 +51,31 @@ def imshow(img: torch.Tensor, savepath):
     plt.savefig(savepath, dpi=400)
     plt.close()
 
-
-def validation(args, model, val_images, val_labels):
+def validation(args, test_images, test_labels):
 
     epochs = args.epochs
     DEVICE = args.device
     DATASET = args.dataset
     CLIENT = args.client
     DP = args.dp
+    K = args.num_embeddings
+    D = args.embedding_dim
+
+    if args.dataset == "mnist" or args.dataset == "fashion-mnist":
+        N, H, W = test_images.data.shape
+        C = 1
+    else:
+        N, C, H, W = test_images.data.shape
+
+    # VQ VAE model initialization
+    model = Improved_VQVAE(K=K, D=D, channel=C, device=DEVICE).to(DEVICE)
 
     # val_images, val_labels = next(iter(testLoader))
     torch_size = torchvision.transforms.Resize([299, 299])
 
-    re_val_images = val_images
+    re_val_images = test_images
     if DATASET == "mnist" or DATASET == "fashion-mnist":
-        re_val_images = torch.repeat_interleave(val_images, repeats=3, dim=1)
+        re_val_images = torch.repeat_interleave(test_images, repeats=3, dim=1)
 
     images_resize = torch_size(re_val_images).to(DEVICE)
 
@@ -82,23 +85,6 @@ def validation(args, model, val_images, val_labels):
     fid_model.eval()
     fid = []
 
-    #  Save grand truth images
-    grand_truth_images = val_images[:16]
-
-    grand_images_save_path = f"Results/{DATASET}/{CLIENT}/{DP}/G_data"
-    if not os.path.exists(grand_images_save_path):
-        os.makedirs(grand_images_save_path)
-    grand_images_save_path += f"/grand_truth_images.png"
-    imshow(torchvision.utils.make_grid(grand_truth_images.cpu().detach(), nrow=4), grand_images_save_path)
-
-    label_names = get_labels(DATASET)
-    val_labels_name = [label_names[i] for i in np.array(val_labels)]
-    label_save_path = f"Results/{DATASET}/{CLIENT}/{DP}/Labels"
-    if not os.path.exists(label_save_path):
-        os.makedirs(label_save_path)
-    label_save_path += f"/validation_labels.txt"
-    np.savetxt(label_save_path, val_labels_name, fmt="%s")
-
     # Validation and draw related figures
     info = {
         "dataset": DATASET,
@@ -107,28 +93,22 @@ def validation(args, model, val_images, val_labels):
     }
 
     weights_save_path = f"Results/{info['dataset']}/{info['client']}/{info['dp']}/weights"
-    reconstruction_save_path = f"Results/{info['dataset']}/{info['client']}/{info['dp']}/G_data/Reconstruction"
-    sampling_save_path = f"Results/{info['dataset']}/{info['client']}/{info['dp']}/G_data/Sampling"
     if not os.path.exists(weights_save_path):
         os.makedirs(weights_save_path)
-    if not os.path.exists(reconstruction_save_path):
-        os.makedirs(reconstruction_save_path)
-    if not os.path.exists(sampling_save_path):
-        os.makedirs(sampling_save_path)
+
 
     model.zero_grad()
     model.eval()
     for e in tqdm.tqdm(range(epochs)):
 
-        info["current_epoch"] = e
+        info["current_epoch"] = e + 1
 
-        PATH = weights_save_path + f"/weights_central_{info['current_epoch']}.pt"
-        model.load_state_dict(torch.load(PATH, map_location=torch.device(DEVICE)))
-        # model = torch.nn.DataParallel(model)
+        vq_vae_PATH = weights_save_path + f"/vqvae/weights_central_{info['current_epoch']}.pt"
+        model.load_state_dict(torch.load(vq_vae_PATH, map_location=torch.device(DEVICE)))
 
-        recon_images, recon_mu, _ = model(val_images.to(DEVICE))
-        # latent_distribution(recon_mu, val_labels, info)
-        latent_distribution(recon_mu.reshape(recon_mu.shape[0], -1), val_labels, info)
+        recon_images = model(test_images.to(DEVICE))[0]
+
+        # latent_distribution(recon_mu.reshape(recon_mu.shape[0], -1), test_labels, info)
 
         # 下面是快速计算的FID、调用Inception V3模型来计算
 
@@ -155,19 +135,6 @@ def validation(args, model, val_images, val_labels):
 
         fid.append(calculate_fid(images_features, recon_images_features))
 
-        # Draw reconstruction images
-        predictions = recon_images[:16]
-        recon_images_save_path = reconstruction_save_path + f"/reconstruction_images_at_epoch_{info['current_epoch']:03d}_G.png"
-        imshow(torchvision.utils.make_grid(predictions.cpu().detach(), nrow=4), recon_images_save_path)
-
-        # Draw sampling images
-        randoms = torch.Tensor(np.random.normal(0, 1, (64, 128)))
-        sample_images_save_path = sampling_save_path + f"/sampling_images_at_epoch_{info['current_epoch']:03d}.png"
-        # generated_images = model.decoder(model.fc3(randoms.to(DEVICE)))
-
-        # 待解决
-        #generated_images = model.
-        #imshow(torchvision.utils.make_grid(generated_images.cpu().detach(), nrow=8), sample_images_save_path)
 
     print("Save central FID")
 
@@ -216,18 +183,10 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--test_batch_size",
-        type=int,
-        default=300,
-        metavar="TB",
-        help="input batch size for testing",
-    )
-
-    parser.add_argument(
         "-n",
         "--epochs",
         type=int,
-        default=200,
+        default=3,
         metavar="N",
         help="number of epochs to load",
     )
@@ -257,14 +216,6 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--lr",
-        type=float,
-        default=1e-3,
-        metavar="LR",
-        help="learning rate",
-    )
-
-    parser.add_argument(
         "--beta1", type=float, default=0.5, help="beta1 for adam. default=0.5"
     )
 
@@ -287,6 +238,22 @@ if __name__ == "__main__":
         help="Use static per-layer clipping with the same clipping threshold for each layer. Necessary for DDP. If `False` (default), uses flat clipping.",
     )
 
+    parser.add_argument(
+        "-D",
+        "--embedding_dim",
+        type=int,
+        default=256,  # 64, 256
+        help="Embedding dimention"
+    )
+
+    parser.add_argument(
+        "-K",
+        "--num_embeddings",
+        type=int,
+        default=512,  # 512, 128
+        help="Embedding dimention"
+    )
+
     args = parser.parse_args()
 
     DATASET = args.dataset
@@ -297,18 +264,19 @@ if __name__ == "__main__":
     _, testset = load_data(DATASET)
     print(DEVICE)
     # model = VAE(DATASET, DEVICE)
-    model = VQVAE(3, 64, 512)
+    # model = VQVAE(3, 64, 512)
 
-    model.to(DEVICE)
+    # model.to(DEVICE)
     testLoader = DataLoader(testset, batch_size=args.test_batch_size, shuffle=False)
-    val_images, val_labels = next(iter(testLoader))
+    test_images, test_labels = next(iter(testLoader))
 
+    """
     if args.dp == "gaussian":
         model = opacus.validators.ModuleValidator.fix(model)
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay,
                                      betas=(args.beta1, args.beta2))
 
-        """
+        
         if args.clip_per_layer:
             # Each layer has the same clipping threshold. The total grad norm is still bounded by `args.max_per_sample_grad_norm`.
             n_layers = len(
@@ -319,7 +287,7 @@ if __name__ == "__main__":
                             ] * n_layers
         else:
             max_grad_norm = args.max_per_sample_grad_norm
-        """
+        
         max_grad_norm = args.max_per_sample_grad_norm
         privacy_engine = PrivacyEngine(secure_mode=args.secure_rng)
         # clipping = "per_layer" if args.clip_per_layer else "flat"
@@ -332,5 +300,6 @@ if __name__ == "__main__":
             max_grad_norm=max_grad_norm
             #clipping=clipping
         )
+    """
     with torch.no_grad():
-        results = validation(args, model, val_images, val_labels)
+        results = validation(args, test_images, test_labels)

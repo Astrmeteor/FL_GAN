@@ -3,7 +3,7 @@ import time
 import torch.distributions as dist
 import torch.nn as nn
 
-from utils import *
+from GAN.Flwr.VAE.VAE_Torch.vqe_utils import *
 
 
 class Reshape(nn.Module):

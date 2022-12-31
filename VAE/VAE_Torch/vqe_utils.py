@@ -18,7 +18,7 @@ def get_batched_loss(args, data_loader, model, loss_func, prior_only=None, loss_
     losses = [[], [], []] if loss_triples else []  # [VLB, Reconstruction Loss, KL] or [Loss]
     loop = tqdm.tqdm((data_loader), total=len(data_loader), leave=False)
     for images, labels in loop:
-        if loop.last_print_n == 1:
+        if loop.last_print_n > 0:
             break
 
         images = images.to(args.device)

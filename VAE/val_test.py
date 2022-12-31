@@ -2,7 +2,7 @@ import argparse
 
 import torch
 
-from VAE_Torch.vq_vae_gated_pixelcnn_prior import train_vq_vae_with_gated_pixelcnn_prior
+from vq_vae_gated_pixelcnn_prior import train_vq_vae_with_gated_pixelcnn_prior
 from utils import load_data
 import numpy as np
 import os
@@ -48,24 +48,30 @@ def args_function():
         "-b",
         "--batch_size",
         type=int,
-        default=64,
+        default=128,
         metavar="B",
         help="Batch size",
     )
 
     parser.add_argument(
-        "--test_batch_size",
+        "--num_reconstruction",
         type=int,
-        default=1024,
-        metavar="TB",
-        help="input batch size for testing",
+        default=36,
+        help="number for reconstruction",
+    )
+
+    parser.add_argument(
+        "--num_sampling",
+        type=int,
+        default=36,
+        help="number of samplings",
     )
 
     parser.add_argument(
         "-n",
         "--epochs",
         type=int,
-        default=1,
+        default=3,
         metavar="N",
         help="number of epochs to train",
     )
@@ -129,14 +135,14 @@ def args_function():
     parser.add_argument(
         "--dataset",
         type=str,
-        default="mnist",
+        default="cifar",
         help="mnist, fashion-mnist, cifar, stl",
     )
 
     parser.add_argument(
         "--dp",
         type=str,
-        default="normal",
+        default="gaussian",
         help="Disable privacy training and just train with vanilla type",
     )
 
@@ -169,7 +175,7 @@ def args_function():
         "-D",
         "--embedding_dim",
         type=int,
-        default=256, # 64, 256
+        default=64, # 64, 256
         help="Embedding dimention"
     )
 
