@@ -128,7 +128,7 @@ def args_function():
     parser.add_argument(
         "--device",
         type=str,
-        default="mps",
+        default="cpu",
         help="default GPU ID for model",
     )
 
