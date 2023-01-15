@@ -8,7 +8,7 @@ import numpy as np
 import os
 import math
 
-def train(args, trainset, testset):
+def main(args, trainset, testset):
     """Train the network on the training set."""
 
     DATASET = args.dataset
@@ -34,6 +34,8 @@ def train(args, trainset, testset):
     # Save Metrics
     vqvqe_train_loss_save_pth = metrics_save_pth + f"/metrics_dict_{args.epochs}.npy"
     np.save(vqvqe_train_loss_save_pth, metrics)
+
+    return metrics
 
 
 def args_function():
@@ -115,6 +117,13 @@ def args_function():
         default=1.0,
         metavar="C",
         help="Clip per-sample gradients to this norm",
+    )
+
+    parser.add_argument(
+        "--epsilon",
+        type=float,
+        default=10,
+        help="Target Epsilon",
     )
 
     parser.add_argument(
@@ -213,4 +222,4 @@ if __name__ == "__main__":
     print(f"Device:{args.device}")
     print(f"Differential Privacy: {DP}")
 
-    results = train(args, trainset, testset)
+    results = main(args, trainset, testset)

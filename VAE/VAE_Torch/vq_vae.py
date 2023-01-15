@@ -1,7 +1,8 @@
 import torch.nn as nn
+import torch
 
-from .vqe_utils import *
-# from .vae import Encoder, Decoder
+# L2 Distance squared
+l2_dist = lambda x, y: (x - y) ** 2
 
 
 class LayerNorm(nn.LayerNorm):
@@ -219,7 +220,7 @@ class Decoder(nn.Module):
 
 
 class VQVAE(nn.Module):
-    def __init__(self, K=128, D=256, channel=3, device="cpu"):
+    def __init__(self, K=128, D=256, channel=3):
         super().__init__()
         self.K = K
         self.D = D
@@ -230,7 +231,7 @@ class VQVAE(nn.Module):
         # self.pixelcnn_prior = GatedPixelCNN(K=K).to(device)
         # self.pixelcnn_loss_fct = nn.CrossEntropyLoss()
 
-    def forward(self, x, prior_only=False):
+    def forward(self, x):
         z_e = self.encoder(x)
         q, z_q = self.codebook(z_e)
         # if prior_only: return q, self.pixelcnn_prior(q)
