@@ -45,14 +45,14 @@ l2_dist = lambda x, y: (x - y) ** 2
 
 def get_vae_loss(x, output):
     N, C, H, W = x.shape
-    x_reconstructed, z_e, z_q = output
+    x_reconstructed, z_e, z_q= output
+    # x_reconstructed = output
 
     reconstruction_loss = l2_dist(x, x_reconstructed).sum() / (N * H * W * C)
     vq_loss = l2_dist(z_e.detach(), z_q).sum() / (N * H * W * C)
     commitment_loss = l2_dist(z_e, z_q.detach()).sum() / (N * H * W * C)
 
     return reconstruction_loss + vq_loss + commitment_loss
-
 
 def get_pixelcnn_prior_loss(x, output):
     q, logit_probs = output
@@ -110,15 +110,16 @@ def train_vq_vae_with_gated_pixelcnn_prior(args, train_set, validation_set, test
     D = args.embedding_dim
     # vq_vae = Improved_VQVAE(K=K, D=D).cuda()
 
-    vq_vae = VQVAE(K=K, D=D, channel=C).to(device=args.device)
+    # vq_vae = VQVAE(K=K, D=D, channel=C).to(device=args.device)
+    vq_vae = VQVAE(K=K, D=D, channel=C)
     # optimizer = torch.optim.Adam(vq_vae.parameters(), lr=lr)
 
     if args.dp == "gaussian":
-        if not opacus.validators.ModuleValidator.is_valid(vq_vae):
-            vq_vae = opacus.validators.ModuleValidator.fix(vq_vae)
-            # opacus.validators.ModuleValidator.validate(vq_vae)
-        optimizer = torch.optim.Adam(vq_vae.parameters(), lr=args.lr, weight_decay=args.weight_decay,
-                                     betas=(args.beta1, args.beta2))
+        # if not opacus.validators.ModuleValidator.is_valid(vq_vae):
+        vq_vae = opacus.validators.ModuleValidator.fix(vq_vae)
+        # optimizer = torch.optim.Adam(vq_vae.parameters(), lr=args.lr, weight_decay=args.weight_decay,
+        #                             betas=(args.beta1, args.beta2))
+        """
         if args.clip_per_layer:
             # Each layer has the same clipping threshold. The total grad norm is still bounded by `args.max_per_sample_grad_norm`.
             n_layers = len(
@@ -129,19 +130,20 @@ def train_vq_vae_with_gated_pixelcnn_prior(args, train_set, validation_set, test
                             ] * n_layers
         else:
             max_grad_norm = args.max_per_sample_grad_norm
-
-        privacy_engine = PrivacyEngine(secure_mode=args.secure_rng)
+        """
+        #privacy_engine = PrivacyEngine(secure_mode=args.secure_rng)
+        privacy_engine = PrivacyEngine()
         # clipping = "per_layer" if args.clip_per_layer else "flat"
 
         vq_vae, optimizer, train_loader = privacy_engine.make_private(
             module=vq_vae,
-            optimizer=optimizer,
+            optimizer=torch.optim.Adam(vq_vae.parameters(), lr=args.lr, weight_decay=args.weight_decay, betas=(args.beta1, args.beta2)),
             data_loader=train_loader,
             #epochs=args.epochs,
             #target_epsilon=args.epsilon,
             #target_delta=args.delta,
             noise_multiplier=args.sigma,
-            max_grad_norm=max_grad_norm,
+            max_grad_norm=args.max_per_sample_grad_norm,
             # clipping=clipping,
             # grad_sample_mode=args.grad_sample_mode,
         )
@@ -149,13 +151,14 @@ def train_vq_vae_with_gated_pixelcnn_prior(args, train_set, validation_set, test
         optimizer = torch.optim.Adam(vq_vae.parameters(), lr=lr)
     # Train vqvae
 
-    vq_vqe_metrics = train(args, data_shape, vq_vae, optimizer, n_epochs_vae, train_loader, validation_loader, test_loader, privacy_engine)
+    vq_vae_metrics = train(args, data_shape, vq_vae, optimizer, n_epochs_vae, train_loader, validation_loader, test_loader, privacy_engine)
 
     # Train pixelgated cnn
-    pixel_cnn_metrics = train(args, data_shape, vq_vae, optimizer, n_epochs_vae, train_loader, validation_loader, test_loader, privacy_engine, prior_only=True)
+    # pixel_cnn_metrics = train(args, data_shape, vq_vae, optimizer, n_epochs_vae, train_loader, validation_loader, test_loader, privacy_engine, prior_only=True)
 
     print(f"[DONE] Time elapsed: {time.time() - start_time:.2f} s")
-    return {**vq_vqe_metrics, **pixel_cnn_metrics}
+    return vq_vae_metrics
+    # return {**vq_vqe_metrics, **pixel_cnn_metrics}
 
 
     # Training
@@ -227,8 +230,10 @@ def train(args, data_shape, model, optimizer, no_epochs, train_loader, validatio
             output = model(images)
 
             loss = loss_fct(images, output)
+            # loss = model.get_vae_loss(images, output)
             loss.backward()
-            print(optimizer.grad_samples)
+
+            # print(optimizer.grad_samples)
             optimizer.step()
 
             train_losses.append(loss.cpu().item())

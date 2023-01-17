@@ -115,7 +115,6 @@ class GatedPixelCNN(nn.Module):
         out = self.out_conv(out)
         return out
 
-
 #class MaskedConv2d(nn.Conv2d):
 class MaskedConv2d(nn.Module):
     """
@@ -222,8 +221,8 @@ class Decoder(nn.Module):
 class VQVAE(nn.Module):
     def __init__(self, K=128, D=256, channel=3):
         super().__init__()
-        self.K = K
-        self.D = D
+        #self.K = K
+        #self.D = D
 
         self.codebook = VectorQuantizer(K=K, D=D)
         self.encoder = Encoder(D=D, in_channel=channel)
@@ -233,10 +232,15 @@ class VQVAE(nn.Module):
 
     def forward(self, x):
         z_e = self.encoder(x)
+
         q, z_q = self.codebook(z_e)
+
         # if prior_only: return q, self.pixelcnn_prior(q)
-        z_e_altered = (z_q - z_e).detach() + z_e
-        x_reconstructed = self.decoder(z_e_altered)
+
+        # z_e_altered = (z_q - z_e).detach() + z_e
+
+        # x_reconstructed = self.decoder(z_e_altered)
+        x_reconstructed = self.decoder(z_e)
 
         return x_reconstructed, z_e, z_q
 
@@ -244,6 +248,7 @@ class VQVAE(nn.Module):
         z_e = self.encoder(x)
         q, z_q = self.codebook(z_e)
         return q
+
     """
     def get_pixelcnn_prior_loss(self, x, output):
         q, logit_probs = output
@@ -251,7 +256,9 @@ class VQVAE(nn.Module):
 
     def get_vae_loss(self, x, output):
         N, C, H, W = x.shape
-        x_reconstructed, z_e, z_q = output
+        x_reconstructed = output
+        z_e = self.z_e
+        z_q = self.z_q
 
         reconstruction_loss = l2_dist(x, x_reconstructed).sum() / (N * H * W * C)
         vq_loss = l2_dist(z_e.detach(), z_q).sum() / (N * H * W * C)

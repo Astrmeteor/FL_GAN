@@ -1,12 +1,15 @@
 import argparse
 
 import torch
+import torchvision.models
 
 from vq_vae_gated_pixelcnn_prior import train_vq_vae_with_gated_pixelcnn_prior
 from utils import load_data
 import numpy as np
 import os
 import math
+import opacus
+
 
 def main(args, trainset, testset):
     """Train the network on the training set."""
@@ -35,7 +38,7 @@ def main(args, trainset, testset):
     vqvqe_train_loss_save_pth = metrics_save_pth + f"/metrics_dict_{args.epochs}.npy"
     np.save(vqvqe_train_loss_save_pth, metrics)
 
-    return metrics
+    # return metrics
 
 
 def args_function():
@@ -222,4 +225,7 @@ if __name__ == "__main__":
     print(f"Device:{args.device}")
     print(f"Differential Privacy: {DP}")
 
-    results = main(args, trainset, testset)
+    # model = resnet = torchvision.models.resnet18(num_classes=10)
+    # model = opacus.validators.ModuleValidator.fix(model)
+
+    main(args, trainset, testset)
