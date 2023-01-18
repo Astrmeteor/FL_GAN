@@ -139,11 +139,12 @@ def train_vq_vae_with_gated_pixelcnn_prior(args, train_set, validation_set, test
             module=vq_vae,
             optimizer=torch.optim.Adam(vq_vae.parameters(), lr=args.lr, weight_decay=args.weight_decay, betas=(args.beta1, args.beta2)),
             data_loader=train_loader,
-            #epochs=args.epochs,
-            #target_epsilon=args.epsilon,
-            #target_delta=args.delta,
+            # epochs=args.epochs,
+            # target_epsilon=args.epsilon,
+            # target_delta=args.delta,
             noise_multiplier=args.sigma,
             max_grad_norm=args.max_per_sample_grad_norm,
+            # poisson_sampling=False
             # clipping=clipping,
             # grad_sample_mode=args.grad_sample_mode,
         )
@@ -230,12 +231,8 @@ def train(args, data_shape, model, optimizer, no_epochs, train_loader, validatio
             output = model(images)
 
             loss = loss_fct(images, output)
-            # loss = model.get_vae_loss(images, output)
             loss.backward()
-
-            # print(optimizer.grad_samples)
             optimizer.step()
-
             train_losses.append(loss.cpu().item())
 
             loop.set_description(f"Epoch [{epoch}/{args.epochs}]")
