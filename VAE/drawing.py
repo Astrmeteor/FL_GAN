@@ -269,7 +269,7 @@ if __name__ == "__main__":
     # model.to(DEVICE)
     testLoader = DataLoader(testset, batch_size=args.test_batch_size, shuffle=False)
     test_images, test_labels = next(iter(testLoader))
-    
+
     """
     if args.dp == "gaussian":
         model = opacus.validators.ModuleValidator.fix(model)

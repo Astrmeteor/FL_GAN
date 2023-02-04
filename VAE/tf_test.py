@@ -7,15 +7,17 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 from keras import layers
 import tensorflow_privacy
-from tensorflow_privacy.privacy.optimizers.dp_optimizer import DPAdamGaussianOptimizer
-from tensorflow_privacy.privacy.analysis import compute_dp_sgd_privacy
+# from tensorflow_privacy.privacy.optimizers.dp_optimizer import DPAdamGaussianOptimizer
+# from tensorflow_privacy.privacy.analysis import compute_dp_sgd_privacy
 # from tensorflow_privacy.privacy.analysis import privacy_ledger
 from tensorflow_privacy.privacy.dp_query import gaussian_query
+
 
 import collections
 from absl import logging
 
 # `VectorQuantizer` layer
+
 
 class VectorQuantizer(layers.Layer):
     def __init__(self, num_embeddings, embedding_dim, beta=0.25, **kwargs):
@@ -112,9 +114,7 @@ def get_vqvae(latent_dim=16, num_embeddings=64):
     reconstructions = decoder(quantized_latents)
     return keras.Model(inputs, reconstructions, name="vq_vae")
 
-
-get_vqvae().summary()
-
+# get_vqvae().summary()
 
 """
 ## Wrapping up the training loop inside `VQVAETrainer`
@@ -145,14 +145,18 @@ class VQVAETrainer(keras.models.Model):
         ]
 
     def train_step(self, x):
+        sess = tf.compat.v1.Session()
         with tf.GradientTape() as tape:
             # Outputs from the VQ-VAE.
             reconstructions = self.vqvae(x)
 
             # Calculate the losses.
-            reconstruction_loss = (
-                tf.reduce_mean((x - reconstructions) ** 2) / self.train_variance
-            )
+            per_example_loss = (x - reconstructions) ** 2 / self.train_variance
+            print(sess.run(per_example_loss))
+
+            reconstruction_loss = tf.nn.compute_average_loss(per_example_loss)
+            # print(sess.run(reconstruction_loss))
+            # tf.reduce_mean((x - reconstructions) ** 2) / self.train_variance
             total_loss = reconstruction_loss + sum(self.vqvae.losses)
 
         # grads, _ = tape.gradient(self.optimizer._compute_gradients(total_loss, self.vqvae.trainable_variables))
@@ -350,13 +354,12 @@ def make_gaussian_optimizer_class(cls):
                 l2_norm_clip,
                 noise_multiplier,
                 num_microbatches=None,
-                ledger=None,
+                # ledger=None,
                 unroll_microbatches=False,
                 *args,  # pylint: disable=keyword-arg-before-vararg
                 **kwargs):
             dp_sum_query = gaussian_query.GaussianSumQuery(
                 l2_norm_clip, l2_norm_clip * noise_multiplier)
-
             #if ledger:
             #    dp_sum_query = privacy_ledger.QueryWithLedger(dp_sum_query,
             #                                                  ledger=ledger)
@@ -373,6 +376,7 @@ def make_gaussian_optimizer_class(cls):
 
     return DPGaussianOptimizerClass
 
+
 if __name__=="__main__":
     """
     ## Load and preprocess the MNIST dataset
@@ -385,7 +389,7 @@ if __name__=="__main__":
     x_train_scaled = (x_train / 255.0) - 0.5
     x_test_scaled = (x_test / 255.0) - 0.5
 
-    data_variance = np.var(x_train / 255.0)
+    data_variance = np.var(x_train / 255.0, dtype=np.float32)
 
     """
     ## Train the VQ-VAE model
@@ -399,10 +403,10 @@ if __name__=="__main__":
     learning_rate = 0.25
 
     # tensorflow_privacy.v1.DPAdamGaussianOptimizer
-    GradientDescentOptimizer = tf.compat.v1.train.GradientDescentOptimizer
-    DPGradientDescentGaussianOptimizer_NEW = make_gaussian_optimizer_class(GradientDescentOptimizer)
+    AdamOptimizer = tf.compat.v1.train.AdamOptimizer
+    DPAdamOptimizer_NEW = make_gaussian_optimizer_class(AdamOptimizer)
 
-    optimizer = DPGradientDescentGaussianOptimizer_NEW(
+    optimizer = DPAdamOptimizer_NEW(
     # optimizer = tensorflow_privacy.DPKerasAdamOptimizer(
         l2_norm_clip=l2_norm_clip,
         noise_multiplier=noise_multiplier,
@@ -410,19 +414,19 @@ if __name__=="__main__":
         learning_rate=learning_rate
     )
 
-    print(f'optimizer class: {type(optimizer).__name__}')
+    # print(f'optimizer class: {type(optimizer).__name__}')
     # vqvae_trainer.compile(optimizer=keras.optimizers.legacy.Adam())
     vqvae_trainer.compile(optimizer=optimizer)
-    vqvae_trainer.fit(x_train_scaled, epochs=2, batch_size=128)
+    vqvae_trainer.fit(x_train_scaled, epochs=1, batch_size=128)
 
     """
     ## Reconstruction results on the test set
     """
 
     trained_vqvae_model = vqvae_trainer.vqvae
-    idx = np.random.choice(len(x_test_scaled), 10)
+    idx = np.random.choice(len(x_test_scaled), 1)
     test_images = x_test_scaled[idx]
-    reconstructions_test = trained_vqvae_model.predict(test_images)
+    reconstructions_test = trained_vqvae_model.predict(tf.convert_to_tensor(test_images))
 
     for test_image, reconstructed_image in zip(test_images, reconstructions_test):
         show_subplot(test_image, reconstructed_image)
@@ -441,12 +445,12 @@ if __name__=="__main__":
 
     for i in range(len(test_images)):
         plt.subplot(1, 2, 1)
-        plt.imshow(test_images[i].squeeze() + 0.5)
+        plt.imshow(test_images[i].squeeze() + 0.5, cmap="gray")
         plt.title("Original")
         plt.axis("off")
 
         plt.subplot(1, 2, 2)
-        plt.imshow(codebook_indices[i])
+        plt.imshow(codebook_indices[i], cmap="gray")
         plt.title("Code")
         plt.axis("off")
         plt.show()
@@ -484,7 +488,7 @@ if __name__=="__main__":
     )(x)
 
     pixel_cnn = keras.Model(pixelcnn_inputs, out, name="pixel_cnn")
-    pixel_cnn.summary()
+    # pixel_cnn.summary()
 
     """
     ## Prepare data to train the PixelCNN
@@ -518,7 +522,7 @@ if __name__=="__main__":
         x=codebook_indices,
         y=codebook_indices,
         batch_size=128,
-        epochs=2,
+        epochs=1,
         validation_split=0.1,
     )
 
@@ -541,7 +545,7 @@ if __name__=="__main__":
     """
 
     # Create an empty array of priors.
-    batch = 10
+    batch = 1
     priors = np.zeros(shape=(batch,) + (pixel_cnn.input_shape)[1:])
     batch, rows, cols = priors.shape
 
@@ -575,11 +579,11 @@ if __name__=="__main__":
     for i in range(batch):
         plt.subplot(1, 2, 1)
         plt.imshow(priors[i])
-        plt.title("Code")
+        plt.title("Sampling Noise")
         plt.axis("off")
 
         plt.subplot(1, 2, 2)
         plt.imshow(generated_samples[i].squeeze() + 0.5)
-        plt.title("Generated Sample")
+        plt.title("Generated Image")
         plt.axis("off")
         plt.show()
