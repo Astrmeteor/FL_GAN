@@ -9,6 +9,8 @@ from keras import layers
 import tensorflow_privacy
 
 from tensorflow_privacy.privacy.dp_query import gaussian_query
+from tensorflow_privacy.privacy.optimizers.dp_optimizer_vectorized import VectorizedDPAdam
+
 
 import collections
 from absl import logging
@@ -156,11 +158,10 @@ class VQVAETrainer(keras.models.Model):
             reconstruction_loss = tf.reduce_mean((x - reconstructions) ** 2) / self.train_variance
             total_loss = reconstruction_loss + sum(self.vqvae.losses)
 
-        # grads, _ = tape.gradient(self.optimizer._compute_gradients(total_loss, self.vqvae.trainable_variables))
         # Backpropagation
-        # grads = tape.gradient(self.optimizer._compute_gradients(total_loss, var_list=self.vqvae.trainable_variables))
-        # grads = tape.gradient(total_loss, self.vqvae.trainable_variables)
-        grads, _ = self.optimizer._compute_gradients(total_loss, var_list=self.vqvae.trainable_variables, tape=tape)
+        grads = tape.gradient(total_loss, self.vqvae.trainable_variables)
+        # grads, _ = self.optimizer._compute_gradients(total_loss, var_list=self.vqvae.trainable_variables, tape=tape)
+
         self.optimizer.apply_gradients(zip(grads, self.vqvae.trainable_variables))
 
         # Loss tracking.
@@ -262,29 +263,22 @@ if __name__ == "__main__":
     ## Train the VQ-VAE model
     """
 
-    vqvae_trainer = VQVAETrainer(data_variance, latent_dim=16, num_embeddings=128)
+    vqvae_trainer = VQVAETrainer(data_variance, latent_dim=64, num_embeddings=128)
 
     l2_norm_clip = 1.5
     noise_multiplier = 1.3
-    num_microbatches = 1
-    learning_rate = 0.25
+    num_microbatches = 50
+    learning_rate = 0.01
 
-    # tensorflow_privacy.v1.DPAdamGaussianOptimizer
-    # AdamOptimizer = tf.compat.v1.train.AdamOptimizer
-    # DPAdamOptimizer_NEW = make_gaussian_optimizer_class(AdamOptimizer)
-
-    optimizer = tensorflow_privacy.DPKerasAdamOptimizer(
+    optimizer = VectorizedDPAdam(
         l2_norm_clip=l2_norm_clip,
         noise_multiplier=noise_multiplier,
         num_microbatches=num_microbatches,
         learning_rate=learning_rate
-
     )
 
-    print(f'optimizer class: {type(optimizer).__name__}')
-    # vqvae_trainer.compile(optimizer=keras.optimizers.legacy.Adam())
     vqvae_trainer.compile(optimizer=optimizer)
-    vqvae_trainer.fit(x_train_scaled, epochs=1, batch_size=128)
+    vqvae_trainer.fit(x_train_scaled, epochs=5, batch_size=128)
 
     """
     ## Reconstruction results on the test set
@@ -322,10 +316,12 @@ if __name__ == "__main__":
         plt.axis("off")
         plt.show()
 
+
     """
     ## PixelCNN hyperparameters
     """
 
+    '''
     num_residual_blocks = 2
     num_pixelcnn_layers = 2
     pixelcnn_input_shape = encoded_outputs.shape[1:-1]
@@ -454,3 +450,5 @@ if __name__ == "__main__":
         plt.title("Generated Image")
         plt.axis("off")
         plt.show()
+        
+    '''
