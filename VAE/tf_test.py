@@ -7,14 +7,12 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 from keras import layers
 import tensorflow_privacy
-# from tensorflow_privacy.privacy.optimizers.dp_optimizer import DPAdamGaussianOptimizer
-# from tensorflow_privacy.privacy.analysis import compute_dp_sgd_privacy
-# from tensorflow_privacy.privacy.analysis import privacy_ledger
-from tensorflow_privacy.privacy.dp_query import gaussian_query
 
+from tensorflow_privacy.privacy.dp_query import gaussian_query
 
 import collections
 from absl import logging
+
 
 # `VectorQuantizer` layer
 
@@ -68,14 +66,16 @@ class VectorQuantizer(layers.Layer):
         # Calculate L2-normalized distance between the inputs and the codes.
         similarity = tf.matmul(flattened_inputs, self.embeddings)
         distances = (
-            tf.reduce_sum(flattened_inputs**2, axis=1, keepdims=True)
-            + tf.reduce_sum(self.embeddings**2, axis=0)
-            - 2 * similarity
+                tf.reduce_sum(flattened_inputs ** 2, axis=1, keepdims=True)
+                + tf.reduce_sum(self.embeddings ** 2, axis=0)
+                - 2 * similarity
         )
 
         # Derive the indices for minimum distances.
         encoding_indices = tf.argmin(distances, axis=1)
         return encoding_indices
+
+
 # Encoder and decoder
 
 
@@ -114,6 +114,7 @@ def get_vqvae(latent_dim=16, num_embeddings=64):
     reconstructions = decoder(quantized_latents)
     return keras.Model(inputs, reconstructions, name="vq_vae")
 
+
 # get_vqvae().summary()
 
 """
@@ -145,24 +146,21 @@ class VQVAETrainer(keras.models.Model):
         ]
 
     def train_step(self, x):
-        sess = tf.compat.v1.Session()
         with tf.GradientTape() as tape:
+
             # Outputs from the VQ-VAE.
             reconstructions = self.vqvae(x)
 
             # Calculate the losses.
-            per_example_loss = (x - reconstructions) ** 2 / self.train_variance
-            print(sess.run(per_example_loss))
 
-            reconstruction_loss = tf.nn.compute_average_loss(per_example_loss)
-            # print(sess.run(reconstruction_loss))
-            # tf.reduce_mean((x - reconstructions) ** 2) / self.train_variance
+            reconstruction_loss = tf.reduce_mean((x - reconstructions) ** 2) / self.train_variance
             total_loss = reconstruction_loss + sum(self.vqvae.losses)
 
         # grads, _ = tape.gradient(self.optimizer._compute_gradients(total_loss, self.vqvae.trainable_variables))
         # Backpropagation
-
-        grads = tape.gradient(total_loss, self.vqvae.trainable_variables)
+        # grads = tape.gradient(self.optimizer._compute_gradients(total_loss, var_list=self.vqvae.trainable_variables))
+        # grads = tape.gradient(total_loss, self.vqvae.trainable_variables)
+        grads, _ = self.optimizer._compute_gradients(total_loss, var_list=self.vqvae.trainable_variables, tape=tape)
         self.optimizer.apply_gradients(zip(grads, self.vqvae.trainable_variables))
 
         # Loss tracking.
@@ -190,6 +188,7 @@ def show_subplot(original, reconstructed):
     plt.axis("off")
 
     plt.show()
+
 
 # PixelCNN model
 
@@ -241,143 +240,11 @@ class ResidualBlock(layers.Layer):
         x = self.conv1(inputs)
         x = self.pixel_conv(x)
         x = self.conv2(x)
-        #return tf.python.keras.layers.add([inputs, x])
+        # return tf.python.keras.layers.add([inputs, x])
         return layers.add([inputs, x])
 
 
-def make_optimizer_class(cls):
-    """Constructs a DP optimizer class from an existing one."""
-    parent_code = tf.compat.v1.train.Optimizer.compute_gradients.__code__
-    child_code = cls.compute_gradients.__code__
-    GATE_OP = tf.compat.v1.train.Optimizer.GATE_OP  # pylint: disable=invalid-name
-    if child_code is not parent_code:
-        logging.warning(
-            'WARNING: Calling make_optimizer_class() on class %s that overrides '
-            'method compute_gradients(). Check to ensure that '
-            'make_optimizer_class() does not interfere with overridden version.',
-            cls.__name__)
-
-    class DPOptimizerClass(cls):
-        """Differentially private subclass of given class cls."""
-
-        _GlobalState = collections.namedtuple(
-            '_GlobalState', ['l2_norm_clip', 'stddev'])
-
-        def __init__(
-                self,
-                dp_sum_query,
-                num_microbatches=None,
-                unroll_microbatches=False,
-                *args,  # pylint: disable=keyword-arg-before-vararg, g-doc-args
-                **kwargs):
-            """Initialize the DPOptimizerClass.
-
-            Args:
-              dp_sum_query: DPQuery object, specifying differential privacy
-                mechanism to use.
-              num_microbatches: How many microbatches into which the minibatch is
-                split. If None, will default to the size of the minibatch, and
-                per-example gradients will be computed.
-              unroll_microbatches: If true, processes microbatches within a Python
-                loop instead of a tf.while_loop. Can be used if using a tf.while_loop
-                raises an exception.
-            """
-            super(DPOptimizerClass, self).__init__(*args, **kwargs)
-            self._dp_sum_query = dp_sum_query
-            self._num_microbatches = num_microbatches
-            self._global_state = self._dp_sum_query.initial_global_state()
-            # Beware: When num_microbatches is large (>100), enabling this parameter
-            # may cause an OOM error.
-            self._unroll_microbatches = unroll_microbatches
-
-        def compute_gradients(self,
-                              loss,
-                              var_list,
-                              gate_gradients=GATE_OP,
-                              aggregation_method=None,
-                              colocate_gradients_with_ops=False,
-                              grad_loss=None,
-                              gradient_tape=None,
-                              curr_noise_mult=0,
-                              curr_norm_clip=1):
-
-            self._dp_sum_query = gaussian_query.GaussianSumQuery(curr_norm_clip,
-                                                                 curr_norm_clip * curr_noise_mult)
-            self._global_state = self._dp_sum_query.make_global_state(curr_norm_clip,
-                                                                      curr_norm_clip * curr_noise_mult)
-
-            # TF is running in Eager mode, check we received a vanilla tape.
-            if not gradient_tape:
-                raise ValueError('When in Eager mode, a tape needs to be passed.')
-
-            vector_loss = loss()
-            if self._num_microbatches is None:
-                self._num_microbatches = tf.shape(input=vector_loss)[0]
-            sample_state = self._dp_sum_query.initial_sample_state(var_list)
-            microbatches_losses = tf.reshape(vector_loss, [self._num_microbatches, -1])
-            sample_params = (self._dp_sum_query.derive_sample_params(self._global_state))
-
-            def process_microbatch(i, sample_state):
-                """Process one microbatch (record) with privacy helper."""
-                microbatch_loss = tf.reduce_mean(input_tensor=tf.gather(microbatches_losses, [i]))
-                grads = gradient_tape.gradient(microbatch_loss, var_list)
-                sample_state = self._dp_sum_query.accumulate_record(sample_params, sample_state, grads)
-                return sample_state
-
-            for idx in range(self._num_microbatches):
-                sample_state = process_microbatch(idx, sample_state)
-
-            if curr_noise_mult > 0:
-                grad_sums, self._global_state = (self._dp_sum_query.get_noised_result(sample_state, self._global_state))
-            else:
-                grad_sums = sample_state
-
-            def normalize(v):
-                return v / tf.cast(self._num_microbatches, tf.float32)
-
-            final_grads = tf.nest.map_structure(normalize, grad_sums)
-            grads_and_vars = final_grads  # list(zip(final_grads, var_list))
-
-            return grads_and_vars
-
-    return DPOptimizerClass
-
-
-def make_gaussian_optimizer_class(cls):
-    """Constructs a DP optimizer with Gaussian averaging of updates."""
-
-    class DPGaussianOptimizerClass(make_optimizer_class(cls)):
-        """DP subclass of given class cls using Gaussian averaging."""
-
-        def __init__(
-                self,
-                l2_norm_clip,
-                noise_multiplier,
-                num_microbatches=None,
-                # ledger=None,
-                unroll_microbatches=False,
-                *args,  # pylint: disable=keyword-arg-before-vararg
-                **kwargs):
-            dp_sum_query = gaussian_query.GaussianSumQuery(
-                l2_norm_clip, l2_norm_clip * noise_multiplier)
-            #if ledger:
-            #    dp_sum_query = privacy_ledger.QueryWithLedger(dp_sum_query,
-            #                                                  ledger=ledger)
-            super(DPGaussianOptimizerClass, self).__init__(
-                dp_sum_query,
-                num_microbatches,
-                unroll_microbatches,
-                *args,
-                **kwargs)
-
-        @property
-        def ledger(self):
-            return self._dp_sum_query.ledger
-
-    return DPGaussianOptimizerClass
-
-
-if __name__=="__main__":
+if __name__ == "__main__":
     """
     ## Load and preprocess the MNIST dataset
     """
@@ -399,22 +266,22 @@ if __name__=="__main__":
 
     l2_norm_clip = 1.5
     noise_multiplier = 1.3
-    num_microbatches = 50
+    num_microbatches = 1
     learning_rate = 0.25
 
     # tensorflow_privacy.v1.DPAdamGaussianOptimizer
-    AdamOptimizer = tf.compat.v1.train.AdamOptimizer
-    DPAdamOptimizer_NEW = make_gaussian_optimizer_class(AdamOptimizer)
+    # AdamOptimizer = tf.compat.v1.train.AdamOptimizer
+    # DPAdamOptimizer_NEW = make_gaussian_optimizer_class(AdamOptimizer)
 
-    optimizer = DPAdamOptimizer_NEW(
-    # optimizer = tensorflow_privacy.DPKerasAdamOptimizer(
+    optimizer = tensorflow_privacy.DPKerasAdamOptimizer(
         l2_norm_clip=l2_norm_clip,
         noise_multiplier=noise_multiplier,
         num_microbatches=num_microbatches,
         learning_rate=learning_rate
+
     )
 
-    # print(f'optimizer class: {type(optimizer).__name__}')
+    print(f'optimizer class: {type(optimizer).__name__}')
     # vqvae_trainer.compile(optimizer=keras.optimizers.legacy.Adam())
     vqvae_trainer.compile(optimizer=optimizer)
     vqvae_trainer.fit(x_train_scaled, epochs=1, batch_size=128)
