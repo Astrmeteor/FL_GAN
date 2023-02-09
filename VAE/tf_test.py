@@ -3,18 +3,13 @@ import matplotlib.pyplot as plt
 
 from tensorflow import keras
 import tensorflow as tf
-# from tensorflow.keras import layers
-import tensorflow_probability as tfp
 from keras import layers
 import tensorflow_privacy
 
-from tensorflow_privacy.privacy.dp_query import gaussian_query
+# from tensorflow_privacy.privacy.dp_query import gaussian_query
 from tensorflow_privacy.privacy.optimizers.dp_optimizer_vectorized import VectorizedDPAdam
-
-
-import collections
-from absl import logging
-
+from tensorflow_privacy.privacy.analysis import compute_dp_sgd_privacy_lib
+# import dp_accounting
 
 # `VectorQuantizer` layer
 
@@ -139,6 +134,9 @@ class VQVAETrainer(keras.models.Model):
         )
         self.vq_loss_tracker = keras.metrics.Mean(name="vq_loss")
 
+        self.current_epoch = 0
+        # self.epsilon_tracker = keras.metrics.get(name="eps")
+
     @property
     def metrics(self):
         return [
@@ -147,9 +145,9 @@ class VQVAETrainer(keras.models.Model):
             self.vq_loss_tracker,
         ]
 
+    # @tf.function
     def train_step(self, x):
         with tf.GradientTape() as tape:
-
             # Outputs from the VQ-VAE.
             reconstructions = self.vqvae(x)
 
@@ -169,11 +167,19 @@ class VQVAETrainer(keras.models.Model):
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
         self.vq_loss_tracker.update_state(sum(self.vqvae.losses))
 
+        eps, _ = compute_dp_sgd_privacy_lib.compute_dp_sgd_privacy(
+            60000, 128, 1.3, self.current_epoch, 1e-5)
+        # print('For delta=1e-5, the current epsilon is: %.2f' % eps)
+        # self.epsilon_tracker = tf.keras.metrics.get(eps)
+
+        self.current_epoch += 1
+
         # Log results.
         return {
             "loss": self.total_loss_tracker.result(),
             "reconstruction_loss": self.reconstruction_loss_tracker.result(),
             "vqvae_loss": self.vq_loss_tracker.result(),
+            # "epsilon": eps
         }
 
 
@@ -265,9 +271,9 @@ if __name__ == "__main__":
 
     vqvae_trainer = VQVAETrainer(data_variance, latent_dim=64, num_embeddings=128)
 
-    l2_norm_clip = 1.5
+    l2_norm_clip = 1.0
     noise_multiplier = 1.3
-    num_microbatches = 50
+    num_microbatches = 256
     learning_rate = 0.01
 
     optimizer = VectorizedDPAdam(
@@ -278,7 +284,7 @@ if __name__ == "__main__":
     )
 
     vqvae_trainer.compile(optimizer=optimizer)
-    vqvae_trainer.fit(x_train_scaled, epochs=5, batch_size=128)
+    vqvae_trainer.fit(x_train_scaled, epochs=2, batch_size=512)
 
     """
     ## Reconstruction results on the test set
@@ -315,7 +321,6 @@ if __name__ == "__main__":
         plt.title("Code")
         plt.axis("off")
         plt.show()
-
 
     """
     ## PixelCNN hyperparameters
