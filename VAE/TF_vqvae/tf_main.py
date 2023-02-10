@@ -1,118 +1,21 @@
+import absl.app
 import numpy as np
 import matplotlib.pyplot as plt
 
 from tensorflow import keras
 import tensorflow as tf
-from keras import layers
+
 import tensorflow_privacy
-
-# from tensorflow_privacy.privacy.dp_query import gaussian_query
 from tensorflow_privacy.privacy.optimizers.dp_optimizer_vectorized import VectorizedDPAdam
-from tensorflow_privacy.privacy.analysis import compute_dp_sgd_privacy_lib
-# import dp_accounting
+from tensorflow_privacy.privacy.analysis import compute_dp_sgd_privacy
+from keras import layers
 
-# `VectorQuantizer` layer
+from tf_model import get_vqvae, show_subplot
+from tf_utils import load_data
 
+from absl import flags
+from absl import logging
 
-class VectorQuantizer(layers.Layer):
-    def __init__(self, num_embeddings, embedding_dim, beta=0.25, **kwargs):
-        super().__init__(**kwargs)
-        self.embedding_dim = embedding_dim
-        self.num_embeddings = num_embeddings
-
-        # The `beta` parameter is best kept between [0.25, 2] as per the paper.
-        self.beta = beta
-
-        # Initialize the embeddings which we will quantize.
-        w_init = tf.random_uniform_initializer()
-        self.embeddings = tf.Variable(
-            initial_value=w_init(
-                shape=(self.embedding_dim, self.num_embeddings), dtype="float32"
-            ),
-            trainable=True,
-            name="embeddings_vqvae",
-        )
-
-    def call(self, x):
-        # Calculate the input shape of the inputs and
-        # then flatten the inputs keeping `embedding_dim` intact.
-        input_shape = tf.shape(x)
-        flattened = tf.reshape(x, [-1, self.embedding_dim])
-
-        # Quantization.
-        encoding_indices = self.get_code_indices(flattened)
-        encodings = tf.one_hot(encoding_indices, self.num_embeddings)
-        quantized = tf.matmul(encodings, self.embeddings, transpose_b=True)
-
-        # Reshape the quantized values back to the original input shape
-        quantized = tf.reshape(quantized, input_shape)
-
-        # Calculate vector quantization loss and add that to the layer. You can learn more
-        # about adding losses to different layers here:
-        # https://keras.io/guides/making_new_layers_and_models_via_subclassing/. Check
-        # the original paper to get a handle on the formulation of the loss function.
-        commitment_loss = tf.reduce_mean((tf.stop_gradient(quantized) - x) ** 2)
-        codebook_loss = tf.reduce_mean((quantized - tf.stop_gradient(x)) ** 2)
-        self.add_loss(self.beta * commitment_loss + codebook_loss)
-
-        # Straight-through estimator.
-        quantized = x + tf.stop_gradient(quantized - x)
-        return quantized
-
-    def get_code_indices(self, flattened_inputs):
-        # Calculate L2-normalized distance between the inputs and the codes.
-        similarity = tf.matmul(flattened_inputs, self.embeddings)
-        distances = (
-                tf.reduce_sum(flattened_inputs ** 2, axis=1, keepdims=True)
-                + tf.reduce_sum(self.embeddings ** 2, axis=0)
-                - 2 * similarity
-        )
-
-        # Derive the indices for minimum distances.
-        encoding_indices = tf.argmin(distances, axis=1)
-        return encoding_indices
-
-
-# Encoder and decoder
-
-
-def get_encoder(latent_dim=16):
-    encoder_inputs = keras.Input(shape=(28, 28, 1))
-    x = layers.Conv2D(32, 3, activation="relu", strides=2, padding="same")(
-        encoder_inputs
-    )
-    x = layers.Conv2D(64, 3, activation="relu", strides=2, padding="same")(x)
-    encoder_outputs = layers.Conv2D(latent_dim, 1, padding="same")(x)
-    return keras.Model(encoder_inputs, encoder_outputs, name="encoder")
-
-
-def get_decoder(latent_dim=16):
-    latent_inputs = keras.Input(shape=get_encoder(latent_dim).output.shape[1:])
-    x = layers.Conv2DTranspose(64, 3, activation="relu", strides=2, padding="same")(
-        latent_inputs
-    )
-    x = layers.Conv2DTranspose(32, 3, activation="relu", strides=2, padding="same")(x)
-    decoder_outputs = layers.Conv2DTranspose(1, 3, padding="same")(x)
-    return keras.Model(latent_inputs, decoder_outputs, name="decoder")
-
-
-"""
-## Standalone VQ-VAE model
-"""
-
-
-def get_vqvae(latent_dim=16, num_embeddings=64):
-    vq_layer = VectorQuantizer(num_embeddings, latent_dim, name="vector_quantizer")
-    encoder = get_encoder(latent_dim)
-    decoder = get_decoder(latent_dim)
-    inputs = keras.Input(shape=(28, 28, 1))
-    encoder_outputs = encoder(inputs)
-    quantized_latents = vq_layer(encoder_outputs)
-    reconstructions = decoder(quantized_latents)
-    return keras.Model(inputs, reconstructions, name="vq_vae")
-
-
-# get_vqvae().summary()
 
 """
 ## Wrapping up the training loop inside `VQVAETrainer`
@@ -120,7 +23,7 @@ def get_vqvae(latent_dim=16, num_embeddings=64):
 
 
 class VQVAETrainer(keras.models.Model):
-    def __init__(self, train_variance, latent_dim=32, num_embeddings=128, **kwargs):
+    def __init__(self, train_variance, latent_dim=64, num_embeddings=128, **kwargs):
         super().__init__(**kwargs)
         self.train_variance = train_variance
         self.latent_dim = latent_dim
@@ -134,7 +37,7 @@ class VQVAETrainer(keras.models.Model):
         )
         self.vq_loss_tracker = keras.metrics.Mean(name="vq_loss")
 
-        self.current_epoch = 0
+        # self.current_epoch = 0
         # self.epsilon_tracker = keras.metrics.get(name="eps")
 
     @property
@@ -167,12 +70,12 @@ class VQVAETrainer(keras.models.Model):
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
         self.vq_loss_tracker.update_state(sum(self.vqvae.losses))
 
-        eps, _ = compute_dp_sgd_privacy_lib.compute_dp_sgd_privacy(
-            60000, 128, 1.3, self.current_epoch, 1e-5)
+        # eps, _ = compute_dp_sgd_privacy.compute_dp_sgd_privacy(
+        #    60000, 128, 1.3, self.current_epoch * 60000 / 128, 1e-5)
         # print('For delta=1e-5, the current epsilon is: %.2f' % eps)
         # self.epsilon_tracker = tf.keras.metrics.get(eps)
 
-        self.current_epoch += 1
+        # self.current_epoch += 1
 
         # Log results.
         return {
@@ -183,116 +86,70 @@ class VQVAETrainer(keras.models.Model):
         }
 
 
-def show_subplot(original, reconstructed):
-    plt.subplot(1, 2, 1)
-    plt.imshow(original.squeeze() + 0.5, cmap="gray")
-    plt.title("Original")
-    plt.axis("off")
+class CustomCallback(keras.callbacks.Callback):
+    def on_epoch_end(self, epoch, logs=None):
 
-    plt.subplot(1, 2, 2)
-    plt.imshow(reconstructed.squeeze() + 0.5, cmap="gray")
-    plt.title("Reconstructed")
-    plt.axis("off")
+        print("\nDifferential Privacy Information")
+        eps, _ = compute_dp_sgd_privacy.compute_dp_sgd_privacy(
+            FLAGS.dataset_len, FLAGS.batch_size, FLAGS.noise_multiplier, epoch, FLAGS.delta)
 
-    plt.show()
+# Flags
 
+flags.DEFINE_boolean(
+    'dpsgd', True, 'If True, train with DP-SGD. If False, '
+                    'train with vanilla SGD.')
 
-# PixelCNN model
+flags.DEFINE_float('learning_rate', 0.01, 'Learning rate for training', short_name='lr')
+flags.DEFINE_float('l2_norm_clip', 1.0, 'Clipping norm')
+flags.DEFINE_float('noise_multiplier', 1.3, 'Ratio of the standard deviation to the clipping norm')
+flags.DEFINE_integer('epochs', 5, 'Number of epochs')
+flags.DEFINE_float('delta', 1e-5, 'Delta')
+flags.DEFINE_integer('batch_size', 256, 'Number of batch size')
+flags.DEFINE_integer('micro_batches', 100, 'Number of microbatches (must evenly divide batch_size)')
+flags.DEFINE_integer('number_dataset', 0, 'Number of dataset', short_name='num')
+flags.DEFINE_integer('latent_dim', 64, 'Embedding dimension', short_name='D')
+flags.DEFINE_integer('num_embeddings', 256, 'Number embedding', short_name='K')
+flags.DEFINE_string('dataset', 'mnist', 'dataset: mnist, fashion-mnist, cifar10, stl')
+flags.DEFINE_integer('dataset_len', 60000, 'Number of dataset')
 
-# The first layer is the PixelCNN layer. This layer simply
-# builds on the 2D convolutional layer, but includes masking.
-
-
-class PixelConvLayer(layers.Layer):
-    def __init__(self, mask_type, **kwargs):
-        super().__init__()
-        self.mask_type = mask_type
-        self.conv = layers.Conv2D(**kwargs)
-
-    def build(self, input_shape):
-        # Build the conv2d layer to initialize kernel variables
-        self.conv.build(input_shape)
-        # Use the initialized kernel to create the mask
-        kernel_shape = self.conv.kernel.get_shape()
-        self.mask = np.zeros(shape=kernel_shape)
-        self.mask[: kernel_shape[0] // 2, ...] = 1.0
-        self.mask[kernel_shape[0] // 2, : kernel_shape[1] // 2, ...] = 1.0
-        if self.mask_type == "B":
-            self.mask[kernel_shape[0] // 2, kernel_shape[1] // 2, ...] = 1.0
-
-    def call(self, inputs):
-        self.conv.kernel.assign(self.conv.kernel * self.mask)
-        return self.conv(inputs)
+FLAGS = flags.FLAGS
 
 
-# This is just a normal residual block, but based on the PixelConvLayer.
-class ResidualBlock(layers.Layer):
-    def __init__(self, filters, **kwargs):
-        super().__init__(**kwargs)
-        self.conv1 = tf.keras.layers.Conv2D(
-            filters=filters, kernel_size=1, activation="relu"
-        )
-        self.pixel_conv = PixelConvLayer(
-            mask_type="B",
-            filters=filters // 2,
-            kernel_size=3,
-            activation="relu",
-            padding="same",
-        )
-        self.conv2 = tf.keras.layers.Conv2D(
-            filters=filters, kernel_size=1, activation="relu"
-        )
-
-    def call(self, inputs):
-        x = self.conv1(inputs)
-        x = self.pixel_conv(x)
-        x = self.conv2(x)
-        # return tf.python.keras.layers.add([inputs, x])
-        return layers.add([inputs, x])
-
-
-if __name__ == "__main__":
+def main(argv):
     """
-    ## Load and preprocess the MNIST dataset
+    ## Load dataset
     """
-
-    (x_train, _), (x_test, _) = keras.datasets.mnist.load_data()
-
-    x_train = np.expand_dims(x_train, -1)
-    x_test = np.expand_dims(x_test, -1)
-    x_train_scaled = (x_train / 255.0) - 0.5
-    x_test_scaled = (x_test / 255.0) - 0.5
-
-    data_variance = np.var(x_train / 255.0, dtype=np.float32)
+    train_data, train_labels, test_data, test_labels = load_data(FLAGS.dataset)
+    data_variance = np.var(train_data, dtype=np.float32)
 
     """
     ## Train the VQ-VAE model
     """
 
-    vqvae_trainer = VQVAETrainer(data_variance, latent_dim=64, num_embeddings=128)
+    vqvae_trainer = VQVAETrainer(data_variance, latent_dim=FLAGS.D, num_embeddings=FLAGS.K)
 
-    l2_norm_clip = 1.0
-    noise_multiplier = 1.3
-    num_microbatches = 256
-    learning_rate = 0.01
-
-    optimizer = VectorizedDPAdam(
-        l2_norm_clip=l2_norm_clip,
-        noise_multiplier=noise_multiplier,
-        num_microbatches=num_microbatches,
-        learning_rate=learning_rate
-    )
+    if FLAGS.dpsgd:
+        optimizer = VectorizedDPAdam(
+            l2_norm_clip=FLAGS.l2_norm_clip,
+            noise_multiplier=FLAGS.noise_multiplier,
+            num_microbatches=FLAGS.micro_batches,
+            learning_rate=FLAGS.lr
+        )
+    else:
+        optimizer = tf.optimizers.Adam(learning_rate=FLAGS.lr)
 
     vqvae_trainer.compile(optimizer=optimizer)
-    vqvae_trainer.fit(x_train_scaled, epochs=2, batch_size=512)
+    history = vqvae_trainer.fit(
+        train_data, epochs=FLAGS.epochs, batch_size=FLAGS.batch_size, callbacks=[CustomCallback()]
+    )
 
     """
     ## Reconstruction results on the test set
     """
 
     trained_vqvae_model = vqvae_trainer.vqvae
-    idx = np.random.choice(len(x_test_scaled), 1)
-    test_images = x_test_scaled[idx]
+    idx = np.random.choice(len(test_data), 1)
+    test_images = train_data[idx]
     reconstructions_test = trained_vqvae_model.predict(tf.convert_to_tensor(test_images))
 
     for test_image, reconstructed_image in zip(test_images, reconstructions_test):
@@ -457,3 +314,7 @@ if __name__ == "__main__":
         plt.show()
         
     '''
+
+
+if __name__ == "__main__":
+    absl.app.run(main)
