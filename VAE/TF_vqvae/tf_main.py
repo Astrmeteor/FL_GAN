@@ -1,6 +1,4 @@
-import absl.app
 import numpy as np
-import matplotlib.pyplot as plt
 
 from tensorflow import keras
 import tensorflow as tf
@@ -10,11 +8,57 @@ from tensorflow_privacy.privacy.optimizers.dp_optimizer_vectorized import Vector
 from tensorflow_privacy.privacy.analysis import compute_dp_sgd_privacy
 from keras import layers
 
-from tf_model import get_vqvae, show_subplot
+from tf_model import get_vqvae
 from tf_utils import load_data
 
-from absl import flags
-from absl import logging
+import argparse
+import os
+import pandas as pd
+
+# parser
+
+parser = argparse.ArgumentParser(
+        description="Tensorflow Differential Pirvacy for VQ-VAE",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+parser.add_argument("--dpsgd", type=bool, default=True,
+                    help="If True, train with DP-SGD. If False, train with vanilla SGD.")
+
+parser.add_argument("--learning_rate", "-lr", type=float, default=0.01,
+                    help="Learning rate for training")
+
+parser.add_argument("--l2_norm_clip", "-clip", type=float, default=1.0,
+                    help="Clipping norm")
+
+parser.add_argument("--noise_multiplier", "-nm", type=float, default=1.3,
+                    help="Ratio of the standard deviation to the clipping norm")
+
+parser.add_argument("--epochs", "-e", type=int, default=2,
+                    help="Number of epochs")
+
+parser.add_argument("--delta", type=float, default=1e-5,
+                    help="Bounds the probability of an arbitrary change in model behavior")
+
+parser.add_argument("--batch_size", "-bs", type=int, default=256,
+                    help="Number of batch size")
+
+parser.add_argument("--micro_batch", "-mc", type=int, default=100,
+                    help="Number of micro batches (must evenly divide batch_size)")
+
+parser.add_argument("--dataset_len", "-len", type=int, default=60000,
+                    help="Number of dataset, 600000 for MNIST")
+
+parser.add_argument("--latent_dim", "-D", type=int, default=64,
+                    help="Embedding dimension")
+
+parser.add_argument("--num_embeddings", "-K", type=int, default=256,
+                    help="Number embedding")
+
+parser.add_argument("--dataset", type=str, default="mnist",
+                    help="Dataset: mnist, fashion-mnist, cifar10, stl")
+
+args = parser.parse_args()
 
 
 """
@@ -23,22 +67,20 @@ from absl import logging
 
 
 class VQVAETrainer(keras.models.Model):
-    def __init__(self, train_variance, latent_dim=64, num_embeddings=128, **kwargs):
+    def __init__(self, train_variance, latent_dim=64, num_embeddings=128, data_shape=[], **kwargs):
         super().__init__(**kwargs)
         self.train_variance = train_variance
         self.latent_dim = latent_dim
         self.num_embeddings = num_embeddings
 
-        self.vqvae = get_vqvae(self.latent_dim, self.num_embeddings)
+        self.data_shape = data_shape
+        self.vqvae = get_vqvae(self.latent_dim, self.num_embeddings, data_shape)
 
         self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
         self.reconstruction_loss_tracker = keras.metrics.Mean(
             name="reconstruction_loss"
         )
         self.vq_loss_tracker = keras.metrics.Mean(name="vq_loss")
-
-        # self.current_epoch = 0
-        # self.epsilon_tracker = keras.metrics.get(name="eps")
 
     @property
     def metrics(self):
@@ -88,76 +130,80 @@ class VQVAETrainer(keras.models.Model):
 
 class CustomCallback(keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs=None):
-
         print("\nDifferential Privacy Information")
+
         eps, _ = compute_dp_sgd_privacy.compute_dp_sgd_privacy(
-            FLAGS.dataset_len, FLAGS.batch_size, FLAGS.noise_multiplier, epoch, FLAGS.delta)
+            args.dataset_len, args.batch_size, args.noise_multiplier, epoch+1, args.delta)
+        logs["epsilon"] = eps
 
-# Flags
+        checkpoint_path = f"TF_vqvae/{args.dataset}/{'dp' if args.dpsgd else 'normal'}"
+        if not os.path.exists(checkpoint_path):
+            os.makedirs(checkpoint_path)
+        checkpoint_path += f"/vqvae_cp_{epoch}"
 
-flags.DEFINE_boolean(
-    'dpsgd', True, 'If True, train with DP-SGD. If False, '
-                    'train with vanilla SGD.')
-
-flags.DEFINE_float('learning_rate', 0.01, 'Learning rate for training', short_name='lr')
-flags.DEFINE_float('l2_norm_clip', 1.0, 'Clipping norm')
-flags.DEFINE_float('noise_multiplier', 1.3, 'Ratio of the standard deviation to the clipping norm')
-flags.DEFINE_integer('epochs', 5, 'Number of epochs')
-flags.DEFINE_float('delta', 1e-5, 'Delta')
-flags.DEFINE_integer('batch_size', 256, 'Number of batch size')
-flags.DEFINE_integer('micro_batches', 100, 'Number of microbatches (must evenly divide batch_size)')
-flags.DEFINE_integer('number_dataset', 0, 'Number of dataset', short_name='num')
-flags.DEFINE_integer('latent_dim', 64, 'Embedding dimension', short_name='D')
-flags.DEFINE_integer('num_embeddings', 256, 'Number embedding', short_name='K')
-flags.DEFINE_string('dataset', 'mnist', 'dataset: mnist, fashion-mnist, cifar10, stl')
-flags.DEFINE_integer('dataset_len', 60000, 'Number of dataset')
-
-FLAGS = flags.FLAGS
+        self.model.save_weights(checkpoint_path)
 
 
-def main(argv):
+def main():
     """
     ## Load dataset
     """
-    train_data, train_labels, test_data, test_labels = load_data(FLAGS.dataset)
+    train_data, train_labels, test_data, test_labels = load_data(args.dataset)
     data_variance = np.var(train_data, dtype=np.float32)
 
     """
     ## Train the VQ-VAE model
     """
+    data_shape = train_data.shape[1:]
+    vqvae_trainer = VQVAETrainer(data_variance,
+                                 latent_dim=args.latent_dim,
+                                 num_embeddings=args.num_embeddings,
+                                 data_shape=data_shape)
 
-    vqvae_trainer = VQVAETrainer(data_variance, latent_dim=FLAGS.D, num_embeddings=FLAGS.K)
+    if args.dpsgd:
+        args.dataset_len = train_data.shape[0]
+        magnitude = len(str(args.dataset_len))
+        args.delta = pow(10, -magnitude)
 
-    if FLAGS.dpsgd:
         optimizer = VectorizedDPAdam(
-            l2_norm_clip=FLAGS.l2_norm_clip,
-            noise_multiplier=FLAGS.noise_multiplier,
-            num_microbatches=FLAGS.micro_batches,
-            learning_rate=FLAGS.lr
+            l2_norm_clip=args.l2_norm_clip,
+            noise_multiplier=args.noise_multiplier,
+            num_microbatches=args.micro_batch,
+            learning_rate=args.learning_rate
         )
     else:
-        optimizer = tf.optimizers.Adam(learning_rate=FLAGS.lr)
+        optimizer = tf.optimizers.Adam(learning_rate=args.lr)
 
     vqvae_trainer.compile(optimizer=optimizer)
+
     history = vqvae_trainer.fit(
-        train_data, epochs=FLAGS.epochs, batch_size=FLAGS.batch_size, callbacks=[CustomCallback()]
+        train_data, epochs=args.epochs, batch_size=args.batch_size, callbacks=[CustomCallback()]
     )
+
+    # Save metrics
+    vqvae_metric_save_path = f"TF_vqvae/{args.dataset}/metric"
+    if not os.path.exists(vqvae_metric_save_path):
+        os.makedirs(vqvae_metric_save_path)
+    vqvae_metric_save_path += f"/vq_vae_metrics_{args.epochs}.csv"
+    vq_vae_metrics = pd.DataFrame(history.history)
+    vq_vae_metrics.to_csv(vqvae_metric_save_path, index=False)
+
 
     """
     ## Reconstruction results on the test set
-    """
+    
 
     trained_vqvae_model = vqvae_trainer.vqvae
     idx = np.random.choice(len(test_data), 1)
-    test_images = train_data[idx]
+    test_images = test_data[idx]
     reconstructions_test = trained_vqvae_model.predict(tf.convert_to_tensor(test_images))
 
     for test_image, reconstructed_image in zip(test_images, reconstructions_test):
         show_subplot(test_image, reconstructed_image)
-
+    """
     """
     ## Visualizing the discrete codes
-    """
+    
 
     encoder = vqvae_trainer.vqvae.get_layer("encoder")
     quantizer = vqvae_trainer.vqvae.get_layer("vector_quantizer")
@@ -169,16 +215,16 @@ def main(argv):
 
     for i in range(len(test_images)):
         plt.subplot(1, 2, 1)
-        plt.imshow(test_images[i].squeeze() + 0.5, cmap="gray")
+        plt.imshow(test_images[i])
         plt.title("Original")
         plt.axis("off")
 
         plt.subplot(1, 2, 2)
-        plt.imshow(codebook_indices[i], cmap="gray")
+        plt.imshow(codebook_indices[i])
         plt.title("Code")
         plt.axis("off")
         plt.show()
-
+    """
     """
     ## PixelCNN hyperparameters
     """
@@ -317,4 +363,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    absl.app.run(main)
+    main()

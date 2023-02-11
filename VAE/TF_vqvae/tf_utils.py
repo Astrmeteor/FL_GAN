@@ -1,6 +1,6 @@
-import tensorflow as tf
 import numpy as np
 import tensorflow_datasets as tfds
+import matplotlib.pyplot as plt
 
 
 def load_data(dataset):
@@ -40,6 +40,19 @@ def load_data(dataset):
 
     return train_data, train_labels, test_data, test_labels
 
+
+def show_subplot(original, reconstructed):
+    plt.subplot(1, 2, 1)
+    plt.imshow(original)
+    plt.title("Original")
+    plt.axis("off")
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(reconstructed)
+    plt.title("Reconstructed")
+    plt.axis("off")
+
+    plt.show()
 
 # if __name__ == "__main__":
 #    load_data("cifar10")

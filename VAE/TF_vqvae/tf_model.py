@@ -1,8 +1,7 @@
-from keras import layers
 import tensorflow as tf
 from tensorflow import keras
+from keras import layers
 import numpy as np
-import matplotlib.pyplot as plt
 
 
 # `VectorQuantizer` layer
@@ -39,10 +38,7 @@ class VectorQuantizer(layers.Layer):
         # Reshape the quantized values back to the original input shape
         quantized = tf.reshape(quantized, input_shape)
 
-        # Calculate vector quantization loss and add that to the layer. You can learn more
-        # about adding losses to different layers here:
-        # https://keras.io/guides/making_new_layers_and_models_via_subclassing/. Check
-        # the original paper to get a handle on the formulation of the loss function.
+        # Calculate vector quantization loss and add that to the layer.
         commitment_loss = tf.reduce_mean((tf.stop_gradient(quantized) - x) ** 2)
         codebook_loss = tf.reduce_mean((quantized - tf.stop_gradient(x)) ** 2)
         self.add_loss(self.beta * commitment_loss + codebook_loss)
@@ -64,27 +60,28 @@ class VectorQuantizer(layers.Layer):
         encoding_indices = tf.argmin(distances, axis=1)
         return encoding_indices
 
-
 # Encoder and decoder
 
 
-def get_encoder(latent_dim=16):
-    encoder_inputs = keras.Input(shape=(28, 28, 1))
-    x = layers.Conv2D(32, 3, activation="relu", strides=2, padding="same")(
+def get_encoder(latent_dim=16, input_shape=[]):
+    encoder_inputs = keras.Input(shape=input_shape)
+    x = layers.Conv2D(latent_dim, 3, activation="relu", strides=2, padding="same")(
         encoder_inputs
     )
-    x = layers.Conv2D(64, 3, activation="relu", strides=2, padding="same")(x)
-    encoder_outputs = layers.Conv2D(latent_dim, 1, padding="same")(x)
+    x = layers.Conv2D(latent_dim, 3, activation="relu", strides=2, padding="same")(x)
+    output_channel = input_shape[2]
+    encoder_outputs = layers.Conv2D(latent_dim, output_channel, padding="same")(x)
     return keras.Model(encoder_inputs, encoder_outputs, name="encoder")
 
 
-def get_decoder(latent_dim=16):
-    latent_inputs = keras.Input(shape=get_encoder(latent_dim).output.shape[1:])
-    x = layers.Conv2DTranspose(64, 3, activation="relu", strides=2, padding="same")(
+def get_decoder(latent_dim=16, input_shape=[]):
+    latent_inputs = keras.Input(shape=get_encoder(latent_dim, input_shape=input_shape).output.shape[1:])
+    x = layers.Conv2DTranspose(latent_dim, 3, activation="relu", strides=2, padding="same")(
         latent_inputs
     )
-    x = layers.Conv2DTranspose(32, 3, activation="relu", strides=2, padding="same")(x)
-    decoder_outputs = layers.Conv2DTranspose(1, 3, padding="same")(x)
+    x = layers.Conv2DTranspose(latent_dim, 3, activation="relu", strides=2, padding="same")(x)
+    output_channel = input_shape[2]
+    decoder_outputs = layers.Conv2DTranspose(output_channel, 3, padding="same")(x)
     return keras.Model(latent_inputs, decoder_outputs, name="decoder")
 
 
@@ -93,30 +90,15 @@ def get_decoder(latent_dim=16):
 """
 
 
-def get_vqvae(latent_dim=16, num_embeddings=64):
+def get_vqvae(latent_dim=16, num_embeddings=64, data_shape=[]):
     vq_layer = VectorQuantizer(num_embeddings, latent_dim, name="vector_quantizer")
-    encoder = get_encoder(latent_dim)
-    decoder = get_decoder(latent_dim)
-    inputs = keras.Input(shape=(28, 28, 1))
+    encoder = get_encoder(latent_dim, data_shape)
+    decoder = get_decoder(latent_dim, data_shape)
+    inputs = keras.Input(shape=data_shape)
     encoder_outputs = encoder(inputs)
     quantized_latents = vq_layer(encoder_outputs)
     reconstructions = decoder(quantized_latents)
     return keras.Model(inputs, reconstructions, name="vq_vae")
-
-
-def show_subplot(original, reconstructed):
-    plt.subplot(1, 2, 1)
-    plt.imshow(original.squeeze() + 0.5, cmap="gray")
-    plt.title("Original")
-    plt.axis("off")
-
-    plt.subplot(1, 2, 2)
-    plt.imshow(reconstructed.squeeze() + 0.5, cmap="gray")
-    plt.title("Reconstructed")
-    plt.axis("off")
-
-    plt.show()
-
 
 # PixelCNN model
 
@@ -146,11 +128,12 @@ class PixelConvLayer(layers.Layer):
         return self.conv(inputs)
 
 
+
 # This is just a normal residual block, but based on the PixelConvLayer.
 class ResidualBlock(layers.Layer):
     def __init__(self, filters, **kwargs):
         super().__init__(**kwargs)
-        self.conv1 = tf.keras.layers.Conv2D(
+        self.conv1 = layers.Conv2D(
             filters=filters, kernel_size=1, activation="relu"
         )
         self.pixel_conv = PixelConvLayer(
@@ -160,7 +143,7 @@ class ResidualBlock(layers.Layer):
             activation="relu",
             padding="same",
         )
-        self.conv2 = tf.keras.layers.Conv2D(
+        self.conv2 = layers.Conv2D(
             filters=filters, kernel_size=1, activation="relu"
         )
 
@@ -170,3 +153,6 @@ class ResidualBlock(layers.Layer):
         x = self.conv2(x)
         # return tf.python.keras.layers.add([inputs, x])
         return layers.add([inputs, x])
+
+
+
