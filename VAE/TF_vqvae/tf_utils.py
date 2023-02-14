@@ -41,18 +41,59 @@ def load_data(dataset):
     return train_data, train_labels, test_data, test_labels
 
 
-def show_subplot(original, reconstructed):
-    plt.subplot(1, 2, 1)
-    plt.imshow(original)
-    plt.title("Original")
-    plt.axis("off")
+def show_batch(image_batch, batch_size, save_path):
+    plt.figure(figsize=(5, 5))
+    for n in range(batch_size*batch_size):
+        ax = plt.subplot(batch_size, batch_size, n+1)
+        plt.imshow(image_batch[n])
+        plt.axis("off")
+    # plt.show()
+    plt.savefig(save_path, dpi=400, bbox_inches="tight")
+    plt.close()
 
-    plt.subplot(1, 2, 2)
-    plt.imshow(reconstructed)
-    plt.title("Reconstructed")
-    plt.axis("off")
 
-    plt.show()
+def show_latent(ori, latent, recon, save_path):
+    plt.figure(figsize=(3, 2))
+    plt.tight_layout()
+    plt.subplots_adjust(hspace=0.1, wspace=0.01, right=0.4)
+    for i in range(len(ori)):
+        plt.subplot(6, 3, 1+i*3)
+        plt.imshow(ori[i])
+        plt.axis("off")
 
+        plt.subplot(6, 3, 2+i*3)
+        plt.imshow(latent[i])
+        plt.axis("off")
+
+        plt.subplot(6, 3, 3+i*3)
+        plt.imshow(recon[i])
+        plt.axis("off")
+    # plt.show()
+    plt.savefig(save_path, dpi=400, bbox_inches="tight")
+    plt.close()
+
+
+def get_labels(dataset_name: str = "stl"):
+    if dataset_name == "stl":
+        label_names = ["airplane", "bird", "car", "cat", "deer", "dog", "horse", "monkey", "ship", "truck"]
+    elif dataset_name == "cifar":
+        label_names = ["airplane", "automobile", "bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck"]
+    elif dataset_name == "fashion-mnist":
+        label_names = ["T-shirt/top", "Trouser", "Pullover", "Dress", "Coat", "Sandal", "Shirt", "Sneaker", "Bag",
+                       "Ankle boot"]
+    elif dataset_name == "mnist":
+        label_names = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"]
+    return label_names
+
+
+def imshow(img, savepath):
+    img = img/2 + 0.5
+    npimg = img.numpy()
+    npimg = np.clip(npimg, 0, 255)
+    plt.imshow(np.transpose(npimg, (1, 2, 0)))
+    plt.axis('off')
+    # plt.show()
+    plt.savefig(savepath, dpi=400)
+    plt.close()
 # if __name__ == "__main__":
 #    load_data("cifar10")

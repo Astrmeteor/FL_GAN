@@ -9,7 +9,7 @@ from tensorflow_privacy.privacy.analysis import compute_dp_sgd_privacy
 from keras import layers
 
 from tf_model import get_vqvae
-from tf_utils import load_data
+from tf_utils import load_data, get_labels, show_batch, show_latent
 
 import argparse
 import os
@@ -34,7 +34,7 @@ parser.add_argument("--l2_norm_clip", "-clip", type=float, default=1.0,
 parser.add_argument("--noise_multiplier", "-nm", type=float, default=1.3,
                     help="Ratio of the standard deviation to the clipping norm")
 
-parser.add_argument("--epochs", "-e", type=int, default=2,
+parser.add_argument("--epochs", "-e", type=int, default=1,
                     help="Number of epochs")
 
 parser.add_argument("--delta", type=float, default=1e-5,
@@ -57,6 +57,8 @@ parser.add_argument("--num_embeddings", "-K", type=int, default=256,
 
 parser.add_argument("--dataset", type=str, default="mnist",
                     help="Dataset: mnist, fashion-mnist, cifar10, stl")
+
+parser.add_argument("--recon_num", type=int, default=36, help="Number of reconstruction, must be even")
 
 args = parser.parse_args()
 
@@ -136,7 +138,7 @@ class CustomCallback(keras.callbacks.Callback):
             args.dataset_len, args.batch_size, args.noise_multiplier, epoch+1, args.delta)
         logs["epsilon"] = eps
 
-        checkpoint_path = f"TF_vqvae/{args.dataset}/{'dp' if args.dpsgd else 'normal'}"
+        checkpoint_path = f"TF_vqvae/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model"
         if not os.path.exists(checkpoint_path):
             os.makedirs(checkpoint_path)
         checkpoint_path += f"/vqvae_cp_{epoch}"
@@ -181,29 +183,43 @@ def main():
     )
 
     # Save metrics
-    vqvae_metric_save_path = f"TF_vqvae/{args.dataset}/metric"
+    vqvae_metric_save_path = f"TF_vqvae/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/metric"
     if not os.path.exists(vqvae_metric_save_path):
         os.makedirs(vqvae_metric_save_path)
     vqvae_metric_save_path += f"/vq_vae_metrics_{args.epochs}.csv"
     vq_vae_metrics = pd.DataFrame(history.history)
     vq_vae_metrics.to_csv(vqvae_metric_save_path, index=False)
 
-
     """
-    ## Reconstruction results on the test set
-    
+    Reconstruction results on the test set
+    Save True image and generated image
+    This is traditional flow: v1
+    """
+    reconstruction_path_traditional_flow = f"TF_vqvae/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/Images/v1"
+    if not os.path.exists(reconstruction_path_traditional_flow):
+        os.makedirs(reconstruction_path_traditional_flow)
 
+    truth_path = reconstruction_path_traditional_flow + "/grand_truth_images.png"
     trained_vqvae_model = vqvae_trainer.vqvae
-    idx = np.random.choice(len(test_data), 1)
+    idx = np.random.choice(len(test_data), args.recon_num)
     test_images = test_data[idx]
-    reconstructions_test = trained_vqvae_model.predict(tf.convert_to_tensor(test_images))
 
-    for test_image, reconstructed_image in zip(test_images, reconstructions_test):
-        show_subplot(test_image, reconstructed_image)
-    """
+    # Save grand truth label, if available
+    label_save_path = reconstruction_path_traditional_flow + "/grand_truth_label.txt"
+    label_names = get_labels(args.dataset)
+    val_labels_name = [label_names[i] for i in np.array(test_labels[idx])]
+    np.savetxt(label_save_path, val_labels_name, fmt="%s")
+    batch_size = int(pow(args.recon_num, 0.5))
+    reconstruction_image = trained_vqvae_model.predict(tf.convert_to_tensor(test_images))
+    reconstruction_save_path = reconstruction_path_traditional_flow + "/reconstruction_image.png"
+
+    show_batch(test_images, batch_size, truth_path)
+    show_batch(reconstruction_image, batch_size, reconstruction_save_path)
+
+
     """
     ## Visualizing the discrete codes
-    
+    """
 
     encoder = vqvae_trainer.vqvae.get_layer("encoder")
     quantizer = vqvae_trainer.vqvae.get_layer("vector_quantizer")
@@ -213,18 +229,9 @@ def main():
     codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
     codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
 
-    for i in range(len(test_images)):
-        plt.subplot(1, 2, 1)
-        plt.imshow(test_images[i])
-        plt.title("Original")
-        plt.axis("off")
+    latent_save_path = reconstruction_path_traditional_flow + "/latent_image.png"
+    show_latent(test_images[:6], codebook_indices[:6], reconstruction_image[:6], latent_save_path)
 
-        plt.subplot(1, 2, 2)
-        plt.imshow(codebook_indices[i])
-        plt.title("Code")
-        plt.axis("off")
-        plt.show()
-    """
     """
     ## PixelCNN hyperparameters
     """
