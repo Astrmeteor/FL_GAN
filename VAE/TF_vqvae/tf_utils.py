@@ -55,17 +55,34 @@ def show_batch(image_batch, batch_size, save_path):
 def show_latent(ori, latent, recon, save_path):
     plt.figure(figsize=(3, 2))
     plt.tight_layout()
-    plt.subplots_adjust(hspace=0.1, wspace=0.01, right=0.4)
+    plt.subplots_adjust(hspace=0, wspace=0, right=0.25, top=0.94, bottom=0.1, left=0.12)
     for i in range(len(ori)):
-        plt.subplot(6, 3, 1+i*3)
+        plt.subplot(10, 3, 1+i*3)
         plt.imshow(ori[i])
         plt.axis("off")
 
-        plt.subplot(6, 3, 2+i*3)
+        plt.subplot(10, 3, 2+i*3)
         plt.imshow(latent[i])
         plt.axis("off")
 
-        plt.subplot(6, 3, 3+i*3)
+        plt.subplot(10, 3, 3+i*3)
+        plt.imshow(recon[i])
+        plt.axis("off")
+    # plt.show()
+    plt.savefig(save_path, dpi=400, bbox_inches="tight")
+    plt.close()
+
+
+def show_sampling(latent, recon, save_path):
+    plt.figure(figsize=(3, 2))
+    plt.tight_layout()
+    plt.subplots_adjust(hspace=0, wspace=0, right=0.21, top=1, bottom=0.1, left=0.12)
+    for i in range(len(recon)):
+        plt.subplot(10, 2, 1 + i * 2)
+        plt.imshow(latent[i])
+        plt.axis("off")
+
+        plt.subplot(10, 2, 2 + i * 2)
         plt.imshow(recon[i])
         plt.axis("off")
     # plt.show()
@@ -85,15 +102,5 @@ def get_labels(dataset_name: str = "stl"):
         label_names = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"]
     return label_names
 
-
-def imshow(img, savepath):
-    img = img/2 + 0.5
-    npimg = img.numpy()
-    npimg = np.clip(npimg, 0, 255)
-    plt.imshow(np.transpose(npimg, (1, 2, 0)))
-    plt.axis('off')
-    # plt.show()
-    plt.savefig(savepath, dpi=400)
-    plt.close()
 # if __name__ == "__main__":
 #    load_data("cifar10")

@@ -2,14 +2,15 @@ import numpy as np
 
 from tensorflow import keras
 import tensorflow as tf
+import tensorflow_probability as tfp
 
 import tensorflow_privacy
 from tensorflow_privacy.privacy.optimizers.dp_optimizer_vectorized import VectorizedDPAdam
 from tensorflow_privacy.privacy.analysis import compute_dp_sgd_privacy
 from keras import layers
 
-from tf_model import get_vqvae
-from tf_utils import load_data, get_labels, show_batch, show_latent
+from tf_model import get_vqvae, get_pixel_cnn
+from tf_utils import load_data, get_labels, show_batch, show_latent, show_sampling
 
 import argparse
 import os
@@ -34,7 +35,7 @@ parser.add_argument("--l2_norm_clip", "-clip", type=float, default=1.0,
 parser.add_argument("--noise_multiplier", "-nm", type=float, default=1.3,
                     help="Ratio of the standard deviation to the clipping norm")
 
-parser.add_argument("--epochs", "-e", type=int, default=1,
+parser.add_argument("--epochs", "-e", type=int, default=100,
                     help="Number of epochs")
 
 parser.add_argument("--delta", type=float, default=1e-5,
@@ -58,7 +59,11 @@ parser.add_argument("--num_embeddings", "-K", type=int, default=256,
 parser.add_argument("--dataset", type=str, default="mnist",
                     help="Dataset: mnist, fashion-mnist, cifar10, stl")
 
-parser.add_argument("--recon_num", type=int, default=36, help="Number of reconstruction, must be even")
+parser.add_argument("--recon_num", type=int, default=36, help="Number of reconstruction for image, must be even")
+
+parser.add_argument("--latent_num", type=int, default=10, help="Number of latent for image")
+
+parser.add_argument("--sampling_num", type=int, default=10, help="Number of sampling for image" )
 
 args = parser.parse_args()
 
@@ -138,11 +143,30 @@ class CustomCallback(keras.callbacks.Callback):
             args.dataset_len, args.batch_size, args.noise_multiplier, epoch+1, args.delta)
         logs["epsilon"] = eps
 
+        # Save model of each epoch
         checkpoint_path = f"TF_vqvae/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model"
         if not os.path.exists(checkpoint_path):
             os.makedirs(checkpoint_path)
         checkpoint_path += f"/vqvae_cp_{epoch}"
 
+        self.model.save_weights(checkpoint_path)
+
+
+class Pixel_CustomCallback(keras.callbacks.Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        print("\nDifferential Privacy Information")
+
+        # while train vqvae and pixel cnn separately, it is necessary to add previous epoch into pixel training
+        # Because both utilize the same optimizer
+        eps, _ = compute_dp_sgd_privacy.compute_dp_sgd_privacy(
+            args.dataset_len, args.batch_size, args.noise_multiplier, epoch+1+args.epochs, args.delta)
+        logs["epsilon"] = eps
+
+        # Save model of each epoch
+        checkpoint_path = f"TF_vqvae/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model"
+        if not os.path.exists(checkpoint_path):
+            os.makedirs(checkpoint_path)
+        checkpoint_path += f"/pixel_cnn_cp_{epoch}"
         self.model.save_weights(checkpoint_path)
 
 
@@ -216,7 +240,6 @@ def main():
     show_batch(test_images, batch_size, truth_path)
     show_batch(reconstruction_image, batch_size, reconstruction_save_path)
 
-
     """
     ## Visualizing the discrete codes
     """
@@ -230,56 +253,24 @@ def main():
     codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
 
     latent_save_path = reconstruction_path_traditional_flow + "/latent_image.png"
-    show_latent(test_images[:6], codebook_indices[:6], reconstruction_image[:6], latent_save_path)
+    show_latent(test_images[:args.latent_num], codebook_indices[:args.latent_num], reconstruction_image[:args.latent_num], latent_save_path)
 
     """
     ## PixelCNN hyperparameters
     """
 
-    '''
-    num_residual_blocks = 2
-    num_pixelcnn_layers = 2
     pixelcnn_input_shape = encoded_outputs.shape[1:-1]
     print(f"Input shape of the PixelCNN: {pixelcnn_input_shape}")
+    pixel_cnn = get_pixel_cnn(pixelcnn_input_shape, args.num_embeddings)
 
-    pixelcnn_inputs = tf.keras.Input(shape=pixelcnn_input_shape, dtype=tf.int32)
-    ohe = tf.one_hot(pixelcnn_inputs, vqvae_trainer.num_embeddings)
-    x = PixelConvLayer(
-        mask_type="A", filters=128, kernel_size=7, activation="relu", padding="same"
-    )(ohe)
-
-    for _ in range(num_residual_blocks):
-        x = ResidualBlock(filters=128)(x)
-
-    for _ in range(num_pixelcnn_layers):
-        x = PixelConvLayer(
-            mask_type="B",
-            filters=128,
-            kernel_size=1,
-            strides=1,
-            activation="relu",
-            padding="valid",
-        )(x)
-
-    out = layers.Conv2D(
-        filters=vqvae_trainer.num_embeddings, kernel_size=1, strides=1, padding="valid"
-    )(x)
-
-    pixel_cnn = keras.Model(pixelcnn_inputs, out, name="pixel_cnn")
     # pixel_cnn.summary()
 
     """
     ## Prepare data to train the PixelCNN
-
-    Objective will be to minimize the CrossEntropy loss between these
-    indices and the PixelCNN outputs. Here, the number of categories is equal to the number
-    of embeddings present in our codebook (128 in our case). The PixelCNN model is
-    trained to learn a distribution (as opposed to minimizing the L1/L2 loss), which is where
-    it gets its generative capabilities from.
     """
 
     # Generate the codebook indices.
-    encoded_outputs = encoder.predict(x_train_scaled)
+    encoded_outputs = encoder.predict(train_data)
     flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
     codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
 
@@ -291,24 +282,30 @@ def main():
     """
 
     pixel_cnn.compile(
-        optimizer=keras.optimizers.legacy.Adam(3e-4),
+        optimizer=optimizer,
         loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
         metrics=["accuracy"],
     )
 
-    pixel_cnn.fit(
+    pixel_history = pixel_cnn.fit(
         x=codebook_indices,
         y=codebook_indices,
-        batch_size=128,
-        epochs=1,
+        batch_size=args.batch_size,
+        epochs=args.epochs,
         validation_split=0.1,
+        callbacks=[Pixel_CustomCallback()]
     )
+
+    # Save Pixel CNN metrics
+    pixel_cnn_metric_save_path = f"TF_vqvae/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/metric"
+    if not os.path.exists(pixel_cnn_metric_save_path):
+        os.makedirs(pixel_cnn_metric_save_path)
+    pixel_cnn_metric_save_path += f"/pixel_cnn_metrics_{args.epochs}.csv"
+    pixel_cnn_metrics = pd.DataFrame(pixel_history.history)
+    pixel_cnn_metrics.to_csv(pixel_cnn_metric_save_path, index=False)
 
     """
     ## Codebook sampling
-
-    Now that our PixelCNN is trained, we can sample distinct codes from its outputs and pass
-    them to our decoder to generate novel images.
     """
 
     # Create a mini sampler model.
@@ -318,12 +315,8 @@ def main():
     outputs = categorical_layer(outputs)
     sampler = keras.Model(inputs, outputs)
 
-    """
-    We now construct a prior to generate images. Here, we will generate 10 images.
-    """
-
     # Create an empty array of priors.
-    batch = 1
+    batch = args.sampling_num
     priors = np.zeros(shape=(batch,) + (pixel_cnn.input_shape)[1:])
     batch, rows, cols = priors.shape
 
@@ -332,15 +325,10 @@ def main():
         for col in range(cols):
             # Feed the whole array and retrieving the pixel value probabilities for the next
             # pixel.
-            probs = sampler.predict(priors)
+            probs = sampler.predict(priors, verbose=0)
             # Use the probabilities to pick pixel values and append the values to the priors.
             priors[:, row, col] = probs[:, row, col]
-
     print(f"Prior shape: {priors.shape}")
-
-    """
-    We can now use our decoder to generate the images.
-    """
 
     # Perform an embedding lookup.
     pretrained_embeddings = quantizer.embeddings
@@ -354,19 +342,8 @@ def main():
     decoder = vqvae_trainer.vqvae.get_layer("decoder")
     generated_samples = decoder.predict(quantized)
 
-    for i in range(batch):
-        plt.subplot(1, 2, 1)
-        plt.imshow(priors[i])
-        plt.title("Sampling Noise")
-        plt.axis("off")
-
-        plt.subplot(1, 2, 2)
-        plt.imshow(generated_samples[i].squeeze() + 0.5)
-        plt.title("Generated Image")
-        plt.axis("off")
-        plt.show()
-        
-    '''
+    sampling_save_path = reconstruction_path_traditional_flow + "/sampling_image.png"
+    show_sampling(priors, generated_samples, sampling_save_path)
 
 
 if __name__ == "__main__":

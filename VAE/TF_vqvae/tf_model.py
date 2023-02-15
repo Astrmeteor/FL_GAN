@@ -100,6 +100,37 @@ def get_vqvae(latent_dim=16, num_embeddings=64, data_shape=[]):
     reconstructions = decoder(quantized_latents)
     return keras.Model(inputs, reconstructions, name="vq_vae")
 
+
+def get_pixel_cnn(pixelcnn_input_shape, K):
+    num_residual_blocks = 2
+    num_pixelcnn_layers = 2
+    # pixelcnn_input_shape = encoded_outputs.shape[1:-1]
+    pixelcnn_inputs = keras.Input(shape=pixelcnn_input_shape, dtype=tf.int32)
+    ohe = tf.one_hot(pixelcnn_inputs, K)
+    x = PixelConvLayer(
+        mask_type="A", filters=128, kernel_size=7, activation="relu", padding="same"
+    )(ohe)
+
+    for _ in range(num_residual_blocks):
+        x = ResidualBlock(filters=128)(x)
+
+    for _ in range(num_pixelcnn_layers):
+        x = PixelConvLayer(
+            mask_type="B",
+            filters=128,
+            kernel_size=1,
+            strides=1,
+            activation="relu",
+            padding="valid",
+        )(x)
+
+    out = keras.layers.Conv2D(
+        filters=K, kernel_size=1, strides=1, padding="valid"
+    )(x)
+
+    return keras.Model(pixelcnn_inputs, out, name="pixel_cnn")
+
+
 # PixelCNN model
 
 # The first layer is the PixelCNN layer. This layer simply
@@ -128,7 +159,6 @@ class PixelConvLayer(layers.Layer):
         return self.conv(inputs)
 
 
-
 # This is just a normal residual block, but based on the PixelConvLayer.
 class ResidualBlock(layers.Layer):
     def __init__(self, filters, **kwargs):
@@ -153,6 +183,8 @@ class ResidualBlock(layers.Layer):
         x = self.conv2(x)
         # return tf.python.keras.layers.add([inputs, x])
         return layers.add([inputs, x])
+
+
 
 
 
