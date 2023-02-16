@@ -119,29 +119,22 @@ class VQVAETrainer(keras.models.Model):
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
         self.vq_loss_tracker.update_state(sum(self.vqvae.losses))
 
-        # eps, _ = compute_dp_sgd_privacy.compute_dp_sgd_privacy(
-        #    60000, 128, 1.3, self.current_epoch * 60000 / 128, 1e-5)
-        # print('For delta=1e-5, the current epsilon is: %.2f' % eps)
-        # self.epsilon_tracker = tf.keras.metrics.get(eps)
-
-        # self.current_epoch += 1
-
         # Log results.
         return {
             "loss": self.total_loss_tracker.result(),
             "reconstruction_loss": self.reconstruction_loss_tracker.result(),
             "vqvae_loss": self.vq_loss_tracker.result(),
-            # "epsilon": eps
         }
 
 
 class CustomCallback(keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs=None):
-        print("\nDifferential Privacy Information")
+        if args.dpsgd == True:
+            print("\nDifferential Privacy Information")
 
-        eps, _ = compute_dp_sgd_privacy.compute_dp_sgd_privacy(
-            args.dataset_len, args.batch_size, args.noise_multiplier, epoch+1, args.delta)
-        logs["epsilon"] = eps
+            eps, _ = compute_dp_sgd_privacy.compute_dp_sgd_privacy(
+                args.dataset_len, args.batch_size, args.noise_multiplier, epoch+1, args.delta)
+            logs["epsilon"] = eps
 
         # Save model of each epoch
         checkpoint_path = f"TF_vqvae/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model"
@@ -154,13 +147,14 @@ class CustomCallback(keras.callbacks.Callback):
 
 class Pixel_CustomCallback(keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs=None):
-        print("\nDifferential Privacy Information")
+        if args.dpsgd == True:
+            print("\nDifferential Privacy Information")
 
-        # while train vqvae and pixel cnn separately, it is necessary to add previous epoch into pixel training
-        # Because both utilize the same optimizer
-        eps, _ = compute_dp_sgd_privacy.compute_dp_sgd_privacy(
-            args.dataset_len, args.batch_size, args.noise_multiplier, epoch+1+args.epochs, args.delta)
-        logs["epsilon"] = eps
+            # while train vqvae and pixel cnn separately, it is necessary to add previous epoch into pixel training
+            # Because both utilize the same optimizer
+            eps, _ = compute_dp_sgd_privacy.compute_dp_sgd_privacy(
+                args.dataset_len, args.batch_size, args.noise_multiplier, epoch+1+args.epochs, args.delta)
+            logs["epsilon"] = eps
 
         # Save model of each epoch
         checkpoint_path = f"TF_vqvae/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model"
@@ -198,10 +192,12 @@ def main():
             learning_rate=args.learning_rate
         )
     else:
-        optimizer = tf.optimizers.Adam(learning_rate=args.lr)
+        # optimizer = tf.optimizers.Adam(learning_rate=args.learning_rate)
+        optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=args.learning_rate)
 
     vqvae_trainer.compile(optimizer=optimizer)
 
+    print(f"Start to training with {'DP' if args.dpsgd else 'Normal'}")
     history = vqvae_trainer.fit(
         train_data, epochs=args.epochs, batch_size=args.batch_size, callbacks=[CustomCallback()]
     )
