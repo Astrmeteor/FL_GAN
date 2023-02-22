@@ -1,3 +1,5 @@
+# Version2 for own method of VQ-VAE in DP
+
 import numpy as np
 
 from tensorflow import keras
@@ -16,6 +18,7 @@ import argparse
 import os
 import pandas as pd
 
+tf.compat.v1.enable_eager_execution()
 # parser
 
 parser = argparse.ArgumentParser(
@@ -35,7 +38,7 @@ parser.add_argument("--l2_norm_clip", "-clip", type=float, default=1.0,
 parser.add_argument("--noise_multiplier", "-nm", type=float, default=1.3,
                     help="Ratio of the standard deviation to the clipping norm")
 
-parser.add_argument("--epochs", "-e", type=int, default=1,
+parser.add_argument("--epochs", "-e", type=int, default=2,
                     help="Number of epochs")
 
 parser.add_argument("--delta", type=float, default=1e-5,
@@ -89,16 +92,24 @@ class VQVAETrainer(keras.models.Model):
         )
         self.vq_loss_tracker = keras.metrics.Mean(name="vq_loss")
 
+        self.total_pixel_cnn_loss_tracker = keras.metrics.Mean(name="total_cnn_loss")
+        self.acc_tracker = keras.metrics.Accuracy(name="acc")
+
+        self.pixel_cnn = get_pixel_cnn([int(data_shape[0]/4), int(data_shape[0]/4), latent_dim], num_embeddings)
+
     @property
     def metrics(self):
         return [
             self.total_loss_tracker,
             self.reconstruction_loss_tracker,
             self.vq_loss_tracker,
+            self.total_pixel_cnn_loss_tracker,
+            self.acc_tracker
         ]
 
     # @tf.function
     def train_step(self, x):
+        # Training of VQ-VAE
         with tf.GradientTape() as tape:
             # Outputs from the VQ-VAE.
             reconstructions = self.vqvae(x)
@@ -108,22 +119,45 @@ class VQVAETrainer(keras.models.Model):
             reconstruction_loss = tf.reduce_mean((x - reconstructions) ** 2) / self.train_variance
             total_loss = reconstruction_loss + sum(self.vqvae.losses)
 
-        # Backpropagation
+        # Backpropagation of VQ-VAE
+
         grads = tape.gradient(total_loss, self.vqvae.trainable_variables)
-        # grads, _ = self.optimizer._compute_gradients(total_loss, var_list=self.vqvae.trainable_variables, tape=tape)
 
         self.optimizer.apply_gradients(zip(grads, self.vqvae.trainable_variables))
+
+        # Training of Pixel CNN
+        with tf.GradientTape() as tape2:
+            encoder = self.vqvae.get_layer("encoder")
+            quantizer = self.vqvae.get_layer("vector_quantizer")
+            encoded_outputs = encoder(x).numpy()
+
+            flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
+            codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
+
+            codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
+            ar = self.pixel_cnn(codebook_indices)
+            ar_loss = keras.losses.SparseCategoricalCrossentropy(from_logits=True)(codebook_indices, ar)
+
+        # Backpropagation of Pixel CNN
+        ar_gradients = tape2.gradient(ar_loss, self.pixel_cnn.trainable_variables)
+
+        self.optimizer.apply_gradients(zip(ar_gradients, self.pixel_cnn.trainable_variables))
 
         # Loss tracking.
         self.total_loss_tracker.update_state(total_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
         self.vq_loss_tracker.update_state(sum(self.vqvae.losses))
 
+        self.total_pixel_cnn_loss_tracker.update_state(ar_loss)
+        self.acc_tracker.update_state(y_true=codebook_indices, y_pred=tf.argmax(ar, 3))
+
         # Log results.
         return {
             "loss": self.total_loss_tracker.result(),
             "reconstruction_loss": self.reconstruction_loss_tracker.result(),
             "vqvae_loss": self.vq_loss_tracker.result(),
+            "Pixel loss": self.total_pixel_cnn_loss_tracker.result(),
+            "Pixel accuracy": self.acc_tracker.result()
         }
 
 
@@ -137,7 +171,7 @@ class CustomCallback(keras.callbacks.Callback):
             logs["epsilon"] = eps
 
         # Save model of each epoch
-        checkpoint_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model"
+        checkpoint_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model/v2"
         if not os.path.exists(checkpoint_path):
             os.makedirs(checkpoint_path)
         checkpoint_path += f"/vqvae_cp_{epoch}"
@@ -157,7 +191,7 @@ class Pixel_CustomCallback(keras.callbacks.Callback):
             logs["epsilon"] = eps
 
         # Save model of each epoch
-        checkpoint_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model"
+        checkpoint_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model/v2"
         if not os.path.exists(checkpoint_path):
             os.makedirs(checkpoint_path)
         checkpoint_path += f"/pixel_cnn_cp_{epoch}"
@@ -201,7 +235,7 @@ def main():
         # optimizer = tf.optimizers.Adam(learning_rate=args.learning_rate)
         optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=args.learning_rate)
 
-    vqvae_trainer.compile(optimizer=optimizer)
+    vqvae_trainer.compile(optimizer=optimizer, run_eagerly=True)
 
     print(f"Start to training with {'DP' if args.dpsgd else 'Normal'}")
     history = vqvae_trainer.fit(
@@ -209,7 +243,7 @@ def main():
     )
 
     # Save metrics
-    vqvae_metric_save_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/metric"
+    vqvae_metric_save_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/metric/v2"
     if not os.path.exists(vqvae_metric_save_path):
         os.makedirs(vqvae_metric_save_path)
     vqvae_metric_save_path += f"/vq_vae_metrics_{args.epochs}.csv"
@@ -221,7 +255,7 @@ def main():
     Save True image and generated image
     This is traditional flow: v1
     """
-    reconstruction_path_traditional_flow = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/Images/v1"
+    reconstruction_path_traditional_flow = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/Images/v2"
     if not os.path.exists(reconstruction_path_traditional_flow):
         os.makedirs(reconstruction_path_traditional_flow)
 
@@ -299,7 +333,7 @@ def main():
     )
 
     # Save Pixel CNN metrics
-    pixel_cnn_metric_save_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/metric"
+    pixel_cnn_metric_save_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/metric/v2"
     if not os.path.exists(pixel_cnn_metric_save_path):
         os.makedirs(pixel_cnn_metric_save_path)
     pixel_cnn_metric_save_path += f"/pixel_cnn_metrics_{args.epochs}.csv"

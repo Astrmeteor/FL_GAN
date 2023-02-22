@@ -103,7 +103,7 @@ def get_vqvae(latent_dim=16, num_embeddings=64, data_shape=[]):
 
 def get_pixel_cnn(pixelcnn_input_shape, K):
     num_residual_blocks = 2
-    num_pixelcnn_layers = 2
+    num_pixelcnn_layers = 12
     # pixelcnn_input_shape = encoded_outputs.shape[1:-1]
     pixelcnn_inputs = keras.Input(shape=pixelcnn_input_shape, dtype=tf.int32)
     ohe = tf.one_hot(pixelcnn_inputs, K)
@@ -183,6 +183,14 @@ class ResidualBlock(layers.Layer):
         x = self.conv2(x)
         # return tf.python.keras.layers.add([inputs, x])
         return layers.add([inputs, x])
+
+
+# To-do
+class GatedPixelCnn(tf.keras.Model):
+    def __init__(self, K, in_channels=64, n_layers=15, n_filters=256):
+        super(GatedPixelCnn, self).__init__(name="gated_pixel_cnn")
+        self.embedding = tf.keras.layers.Embedding(K, in_channels)
+        self.in_conv = PixelConvLayer(mask_type="A", filters=128, kernel_size=7, activation="relu", padding="same")
 
 
 

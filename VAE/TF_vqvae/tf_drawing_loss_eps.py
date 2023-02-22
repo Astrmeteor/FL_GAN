@@ -70,7 +70,7 @@ ax2.yaxis.set_major_locator(plt.MultipleLocator(0.5))
 fig.legend(bbox_to_anchor=(0.6, 0.4), loc=6, borderaxespad=0)
 # plt.tight_layout()
 # plt.show()
-plt.title("Loss and Epsilon for VQ-VAE model")
+plt.title("Loss and Epsilon for VQ-VAE model ")
 plt.savefig('example.png', dpi=400, format='png', bbox_inches='tight')
 
 
