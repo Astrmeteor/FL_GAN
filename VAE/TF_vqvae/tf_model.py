@@ -102,8 +102,8 @@ def get_vqvae(latent_dim=16, num_embeddings=64, data_shape=[]):
 
 
 def get_pixel_cnn(pixelcnn_input_shape, K):
-    num_residual_blocks = 2
-    num_pixelcnn_layers = 12
+    num_residual_blocks = 6
+    num_pixelcnn_layers =6
     # pixelcnn_input_shape = encoded_outputs.shape[1:-1]
     pixelcnn_inputs = keras.Input(shape=pixelcnn_input_shape, dtype=tf.int32)
     ohe = tf.one_hot(pixelcnn_inputs, K)

@@ -35,7 +35,7 @@ parser.add_argument("--l2_norm_clip", "-clip", type=float, default=1.0,
 parser.add_argument("--noise_multiplier", "-nm", type=float, default=1.3,
                     help="Ratio of the standard deviation to the clipping norm")
 
-parser.add_argument("--epochs", "-e", type=int, default=1,
+parser.add_argument("--epochs", "-e", type=int, default=2,
                     help="Number of epochs")
 
 parser.add_argument("--delta", type=float, default=1e-5,
@@ -56,7 +56,7 @@ parser.add_argument("--latent_dim", "-D", type=int, default=64,
 parser.add_argument("--num_embeddings", "-K", type=int, default=256,
                     help="Number embedding")
 
-parser.add_argument("--dataset", type=str, default="cifar10",
+parser.add_argument("--dataset", type=str, default="mnist",
                     help="Dataset: mnist, fashion-mnist, cifar10, stl")
 
 parser.add_argument("--recon_num", type=int, default=36, help="Number of reconstruction for image, must be even")
@@ -137,11 +137,12 @@ class CustomCallback(keras.callbacks.Callback):
             logs["epsilon"] = eps
 
         # Save model of each epoch
-        checkpoint_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model"
+        checkpoint_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model/v1"
         if not os.path.exists(checkpoint_path):
             os.makedirs(checkpoint_path)
         checkpoint_path += f"/vqvae_cp_{epoch}"
 
+        # keras.callbacks.ModelCheckpoint(checkpoint_path, monitor="vqvae_loss", verbose=1, save_best_only=True, mode="min")
         self.model.save_weights(checkpoint_path)
 
 
@@ -157,7 +158,7 @@ class Pixel_CustomCallback(keras.callbacks.Callback):
             logs["epsilon"] = eps
 
         # Save model of each epoch
-        checkpoint_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model"
+        checkpoint_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model/v1"
         if not os.path.exists(checkpoint_path):
             os.makedirs(checkpoint_path)
         checkpoint_path += f"/pixel_cnn_cp_{epoch}"
@@ -209,7 +210,7 @@ def main():
     )
 
     # Save metrics
-    vqvae_metric_save_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/metric"
+    vqvae_metric_save_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/metric/v1"
     if not os.path.exists(vqvae_metric_save_path):
         os.makedirs(vqvae_metric_save_path)
     vqvae_metric_save_path += f"/vq_vae_metrics_{args.epochs}.csv"
@@ -298,14 +299,27 @@ def main():
         callbacks=[Pixel_CustomCallback()]
     )
 
+    # Compute accuracy of autoregressive model
+    encoded_outputs = encoder.predict(test_data)
+    flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
+    codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
+
+    codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
+    ar_acc = []
+    for _ in range(args.epochs):
+        _, acc = pixel_cnn.evaluate(codebook_indices, codebook_indices, batch_size=args.batch_size, verbose=0)
+        ar_acc.append(acc)
+
     # Save Pixel CNN metrics
-    pixel_cnn_metric_save_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/metric"
-    if not os.path.exists(pixel_cnn_metric_save_path):
-        os.makedirs(pixel_cnn_metric_save_path)
-    pixel_cnn_metric_save_path += f"/pixel_cnn_metrics_{args.epochs}.csv"
+    pixel_cnn_save_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/metric/v1"
+    if not os.path.exists(pixel_cnn_save_path):
+        os.makedirs(pixel_cnn_save_path)
+    pixel_cnn_metric_save_path = pixel_cnn_save_path + f"/pixel_cnn_metrics_{args.epochs}.csv"
     pixel_cnn_metrics = pd.DataFrame(pixel_history.history)
     pixel_cnn_metrics.to_csv(pixel_cnn_metric_save_path, index=False)
 
+    pixel_cnn_acc_save_path = pixel_cnn_save_path + f"/pixel_cnn_acc_{args.epochs}.csv"
+    pd.DataFrame(ar_acc).to_csv(pixel_cnn_acc_save_path, index=False)
     """
     ## Codebook sampling
     """

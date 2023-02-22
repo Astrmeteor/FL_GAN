@@ -26,7 +26,7 @@ parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-parser.add_argument("--dpsgd", type=bool, default=False,
+parser.add_argument("--dpsgd", type=bool, default=True,
                     help="If True, train with DP-SGD. If False, train with vanilla SGD.")
 
 parser.add_argument("--learning_rate", "-lr", type=float, default=0.01,
@@ -95,7 +95,7 @@ class VQVAETrainer(keras.models.Model):
         self.total_pixel_cnn_loss_tracker = keras.metrics.Mean(name="total_cnn_loss")
         self.acc_tracker = keras.metrics.Accuracy(name="acc")
 
-        self.pixel_cnn = get_pixel_cnn([int(data_shape[0]/4), int(data_shape[0]/4), latent_dim], num_embeddings)
+        self.pixel_cnn = get_pixel_cnn([int(data_shape[0]/4), int(data_shape[0]/4)], num_embeddings)
 
     @property
     def metrics(self):
@@ -122,7 +122,6 @@ class VQVAETrainer(keras.models.Model):
         # Backpropagation of VQ-VAE
 
         grads = tape.gradient(total_loss, self.vqvae.trainable_variables)
-
         self.optimizer.apply_gradients(zip(grads, self.vqvae.trainable_variables))
 
         # Training of Pixel CNN
@@ -137,7 +136,7 @@ class VQVAETrainer(keras.models.Model):
             codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
             ar = self.pixel_cnn(codebook_indices)
             ar_loss = keras.losses.SparseCategoricalCrossentropy(from_logits=True)(codebook_indices, ar)
-
+            # ar_loss = keras.losses.CategoricalCrossentropy(from_logits=True)(codebook_indices, ar)
         # Backpropagation of Pixel CNN
         ar_gradients = tape2.gradient(ar_loss, self.pixel_cnn.trainable_variables)
 
@@ -150,6 +149,7 @@ class VQVAETrainer(keras.models.Model):
 
         self.total_pixel_cnn_loss_tracker.update_state(ar_loss)
         self.acc_tracker.update_state(y_true=codebook_indices, y_pred=tf.argmax(ar, 3))
+        # self.acc_tracker.update_state(y_true=codebook_indices, y_pred=ar)
 
         # Log results.
         return {
@@ -176,25 +176,6 @@ class CustomCallback(keras.callbacks.Callback):
             os.makedirs(checkpoint_path)
         checkpoint_path += f"/vqvae_cp_{epoch}"
 
-        self.model.save_weights(checkpoint_path)
-
-
-class Pixel_CustomCallback(keras.callbacks.Callback):
-    def on_epoch_end(self, epoch, logs=None):
-        if args.dpsgd == True:
-            print("\nDifferential Privacy Information")
-
-            # while train vqvae and pixel cnn separately, it is necessary to add previous epoch into pixel training
-            # Because both utilize the same optimizer
-            eps, _ = compute_dp_sgd_privacy.compute_dp_sgd_privacy(
-                args.dataset_len, args.batch_size, args.noise_multiplier, epoch+1+args.epochs, args.delta)
-            logs["epsilon"] = eps
-
-        # Save model of each epoch
-        checkpoint_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model/v2"
-        if not os.path.exists(checkpoint_path):
-            os.makedirs(checkpoint_path)
-        checkpoint_path += f"/pixel_cnn_cp_{epoch}"
         self.model.save_weights(checkpoint_path)
 
 
@@ -253,7 +234,7 @@ def main():
     """
     Reconstruction results on the test set
     Save True image and generated image
-    This is traditional flow: v1
+    This is own flow: v2
     """
     reconstruction_path_traditional_flow = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/Images/v2"
     if not os.path.exists(reconstruction_path_traditional_flow):
@@ -291,59 +272,13 @@ def main():
     latent_save_path = reconstruction_path_traditional_flow + "/latent_image.png"
     show_latent(test_images[:args.latent_num], codebook_indices[:args.latent_num], reconstruction_image[:args.latent_num], latent_save_path)
 
-    """
-    ## PixelCNN hyperparameters
-    """
-
-    pixelcnn_input_shape = encoded_outputs.shape[1:-1]
-    print(f"Input shape of the PixelCNN: {pixelcnn_input_shape}")
-    pixel_cnn = get_pixel_cnn(pixelcnn_input_shape, args.num_embeddings)
-
-    # pixel_cnn.summary()
-
-    """
-    ## Prepare data to train the PixelCNN
-    """
-
-    # Generate the codebook indices.
-    encoded_outputs = encoder.predict(train_data)
-    flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
-    codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
-
-    codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
-    print(f"Shape of the training data for PixelCNN: {codebook_indices.shape}")
-
-    """
-    ## PixelCNN training
-    """
-
-    pixel_cnn.compile(
-        optimizer=optimizer,
-        loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-        metrics=["accuracy"],
-    )
-
-    pixel_history = pixel_cnn.fit(
-        x=codebook_indices,
-        y=codebook_indices,
-        batch_size=args.batch_size,
-        epochs=args.epochs,
-        validation_split=0.1,
-        callbacks=[Pixel_CustomCallback()]
-    )
-
-    # Save Pixel CNN metrics
-    pixel_cnn_metric_save_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/metric/v2"
-    if not os.path.exists(pixel_cnn_metric_save_path):
-        os.makedirs(pixel_cnn_metric_save_path)
-    pixel_cnn_metric_save_path += f"/pixel_cnn_metrics_{args.epochs}.csv"
-    pixel_cnn_metrics = pd.DataFrame(pixel_history.history)
-    pixel_cnn_metrics.to_csv(pixel_cnn_metric_save_path, index=False)
 
     """
     ## Codebook sampling
     """
+    ### pixel cnn input shape wrong
 
+    pixel_cnn = vqvae_trainer.pixel_cnn
     # Create a mini sampler model.
     inputs = layers.Input(shape=pixel_cnn.input_shape[1:])
     outputs = pixel_cnn(inputs, training=False)
