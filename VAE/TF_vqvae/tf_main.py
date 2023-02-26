@@ -35,7 +35,7 @@ parser.add_argument("--l2_norm_clip", "-clip", type=float, default=1.0,
 parser.add_argument("--noise_multiplier", "-nm", type=float, default=1.3,
                     help="Ratio of the standard deviation to the clipping norm")
 
-parser.add_argument("--epochs", "-e", type=int, default=2,
+parser.add_argument("--epochs", "-e", type=int, default=1,
                     help="Number of epochs")
 
 parser.add_argument("--delta", type=float, default=1e-5,
@@ -228,13 +228,14 @@ def main():
 
     truth_path = reconstruction_path_traditional_flow + "/grand_truth_images.png"
     trained_vqvae_model = vqvae_trainer.vqvae
-    idx = np.random.choice(len(test_data), args.recon_num)
-    test_images = test_data[idx]
+    # idx = np.random.choice(len(test_data), args.recon_num)
+    idx = args.recon_num
+    test_images = test_data[:idx]
 
     # Save grand truth label, if available
     label_save_path = reconstruction_path_traditional_flow + "/grand_truth_label.txt"
     label_names = get_labels(args.dataset)
-    val_labels_name = [label_names[i] for i in np.array(test_labels[idx])]
+    val_labels_name = [label_names[i] for i in np.array(test_labels[:idx])]
     np.savetxt(label_save_path, val_labels_name, fmt="%s")
     batch_size = int(pow(args.recon_num, 0.5))
     reconstruction_image = trained_vqvae_model.predict(tf.convert_to_tensor(test_images))
@@ -300,13 +301,16 @@ def main():
     )
 
     # Compute accuracy of autoregressive model
-    encoded_outputs = encoder.predict(test_data)
-    flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
-    codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
-
-    codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
     ar_acc = []
     for _ in range(args.epochs):
+        idx = np.random.choice(len(test_data), int(len(test_data)*0.8))
+        test_images = test_data[idx]
+
+        encoded_outputs = encoder.predict(test_images)
+        flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
+        codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
+
+        codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
         _, acc = pixel_cnn.evaluate(codebook_indices, codebook_indices, batch_size=args.batch_size, verbose=0)
         ar_acc.append(acc)
 

@@ -26,7 +26,7 @@ parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-parser.add_argument("--dpsgd", type=bool, default=True,
+parser.add_argument("--dpsgd", type=bool, default=False,
                     help="If True, train with DP-SGD. If False, train with vanilla SGD.")
 
 parser.add_argument("--learning_rate", "-lr", type=float, default=0.01,
@@ -38,7 +38,7 @@ parser.add_argument("--l2_norm_clip", "-clip", type=float, default=1.0,
 parser.add_argument("--noise_multiplier", "-nm", type=float, default=1.3,
                     help="Ratio of the standard deviation to the clipping norm")
 
-parser.add_argument("--epochs", "-e", type=int, default=2,
+parser.add_argument("--epochs", "-e", type=int, default=1,
                     help="Number of epochs")
 
 parser.add_argument("--delta", type=float, default=1e-5,
@@ -272,14 +272,41 @@ def main():
     latent_save_path = reconstruction_path_traditional_flow + "/latent_image.png"
     show_latent(test_images[:args.latent_num], codebook_indices[:args.latent_num], reconstruction_image[:args.latent_num], latent_save_path)
 
+    # Compute accuracy of autoregressive model
+    pixel_cnn = vqvae_trainer.get_layer("pixel_cnn")
+    pixel_cnn.compile(
+        optimizer=optimizer,
+        loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+        metrics=["accuracy"]
+    )
+
+    ar_acc = []
+    for _ in range(args.epochs):
+        # Random choose 80% of test data to test, fold test
+        idx = np.random.choice(len(test_data), int(len(test_data) * 0.8))
+        test_images = test_data[idx]
+
+        encoded_outputs = encoder.predict(test_images)
+        flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
+        codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
+
+        codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
+        _, acc = pixel_cnn.evaluate(codebook_indices, codebook_indices, batch_size=args.batch_size, verbose=0)
+
+        ar_acc.append(acc)
+
+    # Save Pixel CNN metrics
+    pixel_cnn_save_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/metric/v2"
+    if not os.path.exists(pixel_cnn_save_path):
+        os.makedirs(pixel_cnn_save_path)
+    pixel_cnn_acc_save_path = pixel_cnn_save_path + f"/pixel_cnn_acc_{args.epochs}.csv"
+    pd.DataFrame(ar_acc).to_csv(pixel_cnn_acc_save_path, index=False)
 
     """
     ## Codebook sampling
     """
-    ### pixel cnn input shape wrong
-
-    pixel_cnn = vqvae_trainer.pixel_cnn
     # Create a mini sampler model.
+
     inputs = layers.Input(shape=pixel_cnn.input_shape[1:])
     outputs = pixel_cnn(inputs, training=False)
     categorical_layer = tfp.layers.DistributionLambda(tfp.distributions.Categorical)

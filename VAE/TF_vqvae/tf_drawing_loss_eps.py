@@ -4,7 +4,7 @@ import numpy as np
 import os
 
 dataset = "mnist"
-csv_file = "loss_eps.csv"
+csv_file = "v1_loss_eps.csv"
 file_name = f"{dataset}/result/{csv_file}"
 
 csv_reader = csv.reader(open(file_name))
@@ -29,7 +29,7 @@ for line in Dataframe[1:]:
 
 fig, ax1 = plt.subplots(figsize=(10, 5))
 
-x = np.arange(1, 101, 1)
+x = np.arange(1, 51, 1)
 
 # loss
 y1 = loss
@@ -52,7 +52,7 @@ lns6 = ax1.plot(x, y6, label="DP VQ Loss")
 
 
 ax1.set_ylim([0, 1.1])
-ax1.set_xlim([-0.5, 100])
+ax1.set_xlim([-0.5, 50])
 ax1.set_xlabel("Epoch")
 ax1.set_ylabel("Loss")
 ax1.xaxis.set_major_locator(plt.MultipleLocator(10))
@@ -71,7 +71,7 @@ fig.legend(bbox_to_anchor=(0.6, 0.4), loc=6, borderaxespad=0)
 # plt.tight_layout()
 # plt.show()
 plt.title("Loss and Epsilon for VQ-VAE model ")
-plt.savefig('example.png', dpi=400, format='png', bbox_inches='tight')
+plt.savefig('v1_example.png', dpi=400, format='png', bbox_inches='tight')
 
 
 
