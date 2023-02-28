@@ -26,7 +26,7 @@ parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-parser.add_argument("--dpsgd", type=bool, default=False,
+parser.add_argument("--dpsgd", type=bool, default=True,
                     help="If True, train with DP-SGD. If False, train with vanilla SGD.")
 
 parser.add_argument("--learning_rate", "-lr", type=float, default=0.01,
@@ -59,7 +59,7 @@ parser.add_argument("--latent_dim", "-D", type=int, default=64,
 parser.add_argument("--num_embeddings", "-K", type=int, default=256,
                     help="Number embedding")
 
-parser.add_argument("--dataset", type=str, default="cifar10",
+parser.add_argument("--dataset", type=str, default="mnist",
                     help="Dataset: mnist, fashion-mnist, cifar10, stl")
 
 parser.add_argument("--recon_num", type=int, default=36, help="Number of reconstruction for image, must be even")
@@ -171,7 +171,7 @@ class CustomCallback(keras.callbacks.Callback):
             logs["epsilon"] = eps
 
         # Save model of each epoch
-        checkpoint_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/model/v2"
+        checkpoint_path = iwantto_path + f"/{args.dataset}/v2/{'dp' if args.dpsgd else 'normal'}/model"
         if not os.path.exists(checkpoint_path):
             os.makedirs(checkpoint_path)
         checkpoint_path += f"/vqvae_cp_{epoch}"
@@ -224,7 +224,7 @@ def main():
     )
 
     # Save metrics
-    vqvae_metric_save_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/metric/v2"
+    vqvae_metric_save_path = iwantto_path + f"/{args.dataset}/v2/{'dp' if args.dpsgd else 'normal'}/metric"
     if not os.path.exists(vqvae_metric_save_path):
         os.makedirs(vqvae_metric_save_path)
     vqvae_metric_save_path += f"/vq_vae_metrics_{args.epochs}.csv"
@@ -236,19 +236,20 @@ def main():
     Save True image and generated image
     This is own flow: v2
     """
-    reconstruction_path_traditional_flow = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/Images/v2"
+    reconstruction_path_traditional_flow = iwantto_path + f"/{args.dataset}/v2/{'dp' if args.dpsgd else 'normal'}/Images"
     if not os.path.exists(reconstruction_path_traditional_flow):
         os.makedirs(reconstruction_path_traditional_flow)
 
     truth_path = reconstruction_path_traditional_flow + "/grand_truth_images.png"
     trained_vqvae_model = vqvae_trainer.vqvae
-    idx = np.random.choice(len(test_data), args.recon_num)
-    test_images = test_data[idx]
+    # idx = np.random.choice(len(test_data), args.recon_num)
+    idx = args.recon_num
+    test_images = test_data[:idx]
 
     # Save grand truth label, if available
     label_save_path = reconstruction_path_traditional_flow + "/grand_truth_label.txt"
     label_names = get_labels(args.dataset)
-    val_labels_name = [label_names[i] for i in np.array(test_labels[idx])]
+    val_labels_name = [label_names[i] for i in np.array(test_labels[:idx])]
     np.savetxt(label_save_path, val_labels_name, fmt="%s")
     batch_size = int(pow(args.recon_num, 0.5))
     reconstruction_image = trained_vqvae_model.predict(tf.convert_to_tensor(test_images))
@@ -296,7 +297,7 @@ def main():
         ar_acc.append(acc)
 
     # Save Pixel CNN metrics
-    pixel_cnn_save_path = iwantto_path + f"/{args.dataset}/{'dp' if args.dpsgd else 'normal'}/metric/v2"
+    pixel_cnn_save_path = iwantto_path + f"/{args.dataset}/v2/{'dp' if args.dpsgd else 'normal'}/metric"
     if not os.path.exists(pixel_cnn_save_path):
         os.makedirs(pixel_cnn_save_path)
     pixel_cnn_acc_save_path = pixel_cnn_save_path + f"/pixel_cnn_acc_{args.epochs}.csv"
