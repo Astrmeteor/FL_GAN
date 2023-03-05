@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 
 from tensorflow import keras
@@ -10,12 +12,17 @@ from tensorflow_privacy.privacy.analysis import compute_dp_sgd_privacy
 from keras import layers
 
 from tf_model import get_vqvae, get_pixel_cnn
-from tf_utils import load_data, get_labels, show_batch, show_latent, show_sampling
+from tf_utils import load_data, get_labels, show_batch, show_latent, show_sampling, get_fid_score, get_inception_score
 
 import argparse
 import os
 import pandas as pd
+import warnings
 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.filterwarnings('ignore', category=PendingDeprecationWarning)
+warnings.filterwarnings("default")
 # parser
 
 parser = argparse.ArgumentParser(
@@ -23,7 +30,7 @@ parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-parser.add_argument("--dpsgd", type=bool, default=True,
+parser.add_argument("--dpsgd", type=bool, default=False,
                     help="If True, train with DP-SGD. If False, train with vanilla SGD.")
 
 parser.add_argument("--learning_rate", "-lr", type=float, default=0.01,
@@ -44,7 +51,7 @@ parser.add_argument("--delta", type=float, default=1e-5,
 parser.add_argument("--batch_size", "-bs", type=int, default=256,
                     help="Number of batch size")
 
-parser.add_argument("--micro_batch", "-mc", type=int, default=100,
+parser.add_argument("--micro_batch", "-mc", type=int, default=200,
                     help="Number of micro batches (must evenly divide batch_size)")
 
 parser.add_argument("--dataset_len", "-len", type=int, default=60000,
@@ -56,15 +63,16 @@ parser.add_argument("--latent_dim", "-D", type=int, default=64,
 parser.add_argument("--num_embeddings", "-K", type=int, default=256,
                     help="Number embedding")
 
-parser.add_argument("--dataset", type=str, default="mnist",
+parser.add_argument("--dataset", type=str, default="cifar10",
                     help="Dataset: mnist, fashion-mnist, cifar10, stl")
 
 parser.add_argument("--recon_num", type=int, default=36, help="Number of reconstruction for image, must be even")
 
 parser.add_argument("--latent_num", type=int, default=10, help="Number of latent for image")
 
-parser.add_argument("--sampling_num", type=int, default=10, help="Number of sampling for image" )
+parser.add_argument("--sampling_num", type=int, default=10, help="Number of sampling for image")
 
+parser.add_argument("--epsilon", type=float, default=2.0, help="Fixed value of epsilon")
 args = parser.parse_args()
 
 
@@ -195,7 +203,8 @@ def main():
             l2_norm_clip=args.l2_norm_clip,
             noise_multiplier=args.noise_multiplier,
             num_microbatches=args.micro_batch,
-            learning_rate=args.learning_rate
+            learning_rate=args.learning_rate,
+            epsilon= 1.0
         )
     else:
         print("Processing in normal")
@@ -204,10 +213,14 @@ def main():
 
     vqvae_trainer.compile(optimizer=optimizer)
 
-    print(f"Start to training with {'DP' if args.dpsgd else 'Normal'}")
+    print(f"Start to training with {'DP' if args.dpsgd else 'Normal'} for {args.dataset}")
+
+    train_start = time.time()
     history = vqvae_trainer.fit(
         train_data, epochs=args.epochs, batch_size=args.batch_size, callbacks=[CustomCallback()]
     )
+    train_end = time.time() - train_start
+    print(f"VQ-VAE training time: {train_end:.2f}s")
 
     # Save metrics
     vqvae_metric_save_path = iwantto_path + f"/{args.dataset}/v1/{'dp' if args.dpsgd else 'normal'}/metric"
@@ -238,11 +251,20 @@ def main():
     val_labels_name = [label_names[i] for i in np.array(test_labels[:idx])]
     np.savetxt(label_save_path, val_labels_name, fmt="%s")
     batch_size = int(pow(args.recon_num, 0.5))
-    reconstruction_image = trained_vqvae_model.predict(tf.convert_to_tensor(test_images))
+    # reconstruction_images = trained_vqvae_model.predict(tf.convert_to_tensor(test_images))
+    reconstruction_images = trained_vqvae_model.predict(test_images)
     reconstruction_save_path = reconstruction_path_traditional_flow + "/reconstruction_image.png"
 
-    show_batch(test_images, batch_size, truth_path)
-    show_batch(reconstruction_image, batch_size, reconstruction_save_path)
+    # test_x = tf.tile(test_data, [1, 1, 1, 3])
+    # recon_x = tf.tile(reconstruction_image, [1, 1, 1, 3])
+    fid = get_fid_score(test_images, reconstruction_images)
+    print(f"Compare test images with reconstruction images, FID: {fid}")
+
+    inception_score = get_inception_score(reconstruction_images)
+    print(f"Compute reconstruction images, IS: {inception_score}")
+
+    show_batch(test_images, batch_size, truth_path, True if test_images.shape[3] == 3 else False)
+    show_batch(reconstruction_images, batch_size, reconstruction_save_path, True if reconstruction_images.shape[3] == 3 else False)
 
     """
     ## Visualizing the discrete codes
@@ -257,10 +279,11 @@ def main():
     codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
 
     latent_save_path = reconstruction_path_traditional_flow + "/latent_image.png"
-    show_latent(test_images[:args.latent_num], codebook_indices[:args.latent_num], reconstruction_image[:args.latent_num], latent_save_path)
+    show_latent(test_images[:args.latent_num], codebook_indices[:args.latent_num], reconstruction_images[:args.latent_num],
+                latent_save_path, True if test_images.shape[3] == 3 else False)
 
     """
-    ## PixelCNN hyperparameters
+    ## PixelCNN hyper parameters
     """
 
     pixelcnn_input_shape = encoded_outputs.shape[1:-1]
@@ -291,6 +314,7 @@ def main():
         metrics=["accuracy"],
     )
 
+    pixel_start = time.time()
     pixel_history = pixel_cnn.fit(
         x=codebook_indices,
         y=codebook_indices,
@@ -299,6 +323,8 @@ def main():
         validation_split=0.1,
         callbacks=[Pixel_CustomCallback()]
     )
+    pixel_end = time.time() - pixel_start
+    print(f"Pixel training time: {pixel_end:.2f}s")
 
     # Compute accuracy of autoregressive model
     ar_acc = []
@@ -363,7 +389,9 @@ def main():
     generated_samples = decoder.predict(quantized)
 
     sampling_save_path = reconstruction_path_traditional_flow + "/sampling_image.png"
-    show_sampling(priors, generated_samples, sampling_save_path)
+    show_sampling(priors, generated_samples, sampling_save_path, True if generated_samples.shape[3] == 3 else False)
+    inception_score = get_inception_score(generated_samples)
+    print(f"Compute sampling images, IS: {inception_score}")
 
 
 if __name__ == "__main__":

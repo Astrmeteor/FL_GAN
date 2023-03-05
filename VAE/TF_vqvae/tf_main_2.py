@@ -252,7 +252,7 @@ def main():
     val_labels_name = [label_names[i] for i in np.array(test_labels[:idx])]
     np.savetxt(label_save_path, val_labels_name, fmt="%s")
     batch_size = int(pow(args.recon_num, 0.5))
-    reconstruction_image = trained_vqvae_model.predict(tf.convert_to_tensor(test_images))
+    reconstruction_image = trained_vqvae_model.predict(test_images)
     reconstruction_save_path = reconstruction_path_traditional_flow + "/reconstruction_image.png"
 
     show_batch(test_images, batch_size, truth_path)

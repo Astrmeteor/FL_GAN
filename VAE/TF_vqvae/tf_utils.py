@@ -1,6 +1,13 @@
 import numpy as np
 import tensorflow_datasets as tfds
 import matplotlib.pyplot as plt
+import tensorflow_gan as tfgan
+import tensorflow as tf
+import tensorflow_hub as tfhub
+import os
+import tqdm
+
+current_path = os.path.dirname(os.path.abspath(__file__))
 
 
 def load_data(dataset):
@@ -41,49 +48,68 @@ def load_data(dataset):
     return train_data, train_labels, test_data, test_labels
 
 
-def show_batch(image_batch, batch_size, save_path):
+def show_batch(image_batch, batch_size, save_path, gray=False):
     plt.figure(figsize=(5, 5))
     for n in range(batch_size*batch_size):
-        ax = plt.subplot(batch_size, batch_size, n+1)
-        plt.imshow(image_batch[n])
+        plt.subplot(batch_size, batch_size, n+1)
+        if gray:
+            plt.imshow(image_batch[n], cmap="gray")
+        else:
+            plt.imshow(image_batch[n])
         plt.axis("off")
     # plt.show()
     plt.savefig(save_path, dpi=400, bbox_inches="tight")
     plt.close()
 
 
-def show_latent(ori, latent, recon, save_path):
+def show_latent(ori, latent, recon, save_path, gray=False):
     plt.figure(figsize=(3, 2))
     plt.tight_layout()
     plt.subplots_adjust(hspace=0, wspace=0, right=0.25, top=0.94, bottom=0.1, left=0.12)
     for i in range(len(ori)):
         plt.subplot(10, 3, 1+i*3)
-        plt.imshow(ori[i])
+        if gray:
+            plt.imshow(ori[i], cmap="gray")
+        else:
+            plt.imshow(ori[i])
         plt.axis("off")
 
         plt.subplot(10, 3, 2+i*3)
-        plt.imshow(latent[i])
+        if gray:
+            plt.imshow(latent[i], cmap="gray")
+        else:
+            plt.imshow(latent[i])
         plt.axis("off")
 
         plt.subplot(10, 3, 3+i*3)
-        plt.imshow(recon[i])
+        if gray:
+            plt.imshow(recon[i], cmap="gray")
+        else:
+            plt.imshow(recon[i])
         plt.axis("off")
     # plt.show()
     plt.savefig(save_path, dpi=400, bbox_inches="tight")
     plt.close()
 
 
-def show_sampling(latent, recon, save_path):
+def show_sampling(latent, recon, save_path, gray=False):
     plt.figure(figsize=(3, 2))
     plt.tight_layout()
     plt.subplots_adjust(hspace=0, wspace=0, right=0.21, top=1, bottom=0.1, left=0.12)
     for i in range(len(recon)):
         plt.subplot(10, 2, 1 + i * 2)
-        plt.imshow(latent[i])
+        if gray:
+            plt.imshow(latent[i], cmap="gray")
+        else:
+            plt.imshow(latent[i])
         plt.axis("off")
 
         plt.subplot(10, 2, 2 + i * 2)
-        plt.imshow(recon[i])
+        plt.subplot(10, 3, 3 + i * 3)
+        if gray:
+            plt.imshow(recon[i], cmap="gray")
+        else:
+            plt.imshow(recon[i])
         plt.axis("off")
     # plt.show()
     plt.savefig(save_path, dpi=400, bbox_inches="tight")
@@ -101,6 +127,50 @@ def get_labels(dataset_name: str = "stl"):
     elif dataset_name == "mnist":
         label_names = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"]
     return label_names
+
+
+@tf.function
+def get_inception_score(images):
+
+    image = images[:1000]
+    if images.shape[3] == 1:
+        image = tf.tile(images[:1000], [1, 1, 1, 3])
+
+    size = tfgan.eval.INCEPTION_DEFAULT_IMAGE_SIZE
+    resized_images = tf.image.resize(image, [size, size], method=tf.image.ResizeMethod.BILINEAR)
+
+    inception_model = tfhub.KerasLayer('https://tfhub.dev/google/imagenet/inception_v3/feature_vector/5')
+    inc_score = tfgan.eval.inception_score(resized_images[:100], classifier_fn=inception_model)
+
+    return inc_score
+
+
+# @tf.function
+def get_fid_score(real_image, gen_image):
+
+    real_images = real_image
+    gen_images = gen_image
+    if real_image.shape[3] == 1:
+        real_images = tf.tile(real_image, [1, 1, 1, 3])
+        gen_images = tf.tile(gen_image, [1, 1, 1, 3])
+
+    size = tfgan.eval.INCEPTION_DEFAULT_IMAGE_SIZE
+    resized_real_images = tf.image.resize(real_images, [size, size], method=tf.image.ResizeMethod.BILINEAR)
+    resized_generated_images = tf.image.resize(gen_images, [size, size], method=tf.image.ResizeMethod.BILINEAR)
+
+    resized_real_images = resized_real_images / 127.5 - 1
+    resized_generated_images = resized_generated_images / 127.5 - 1
+
+    inception_model = tfhub.KerasLayer('https://tfhub.dev/google/imagenet/inception_v3/feature_vector/5')
+    fid = tfgan.eval.frechet_inception_distance(resized_real_images, resized_generated_images, classifier_fn=inception_model)
+
+    return fid.numpy()
+
+
+def get_psnr(real, generated):
+    psnr_value = tf.reduce_mean(tf.image.psnr(generated, real, max_val=256.0))
+    return psnr_value
+
 
 # if __name__ == "__main__":
 #    load_data("cifar10")

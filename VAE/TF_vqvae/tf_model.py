@@ -102,8 +102,8 @@ def get_vqvae(latent_dim=16, num_embeddings=64, data_shape=[]):
 
 
 def get_pixel_cnn(pixelcnn_input_shape, K):
-    num_residual_blocks = 6
-    num_pixelcnn_layers =6
+    num_residual_blocks = 3
+    num_pixelcnn_layers = 3
     # pixelcnn_input_shape = encoded_outputs.shape[1:-1]
     pixelcnn_inputs = keras.Input(shape=pixelcnn_input_shape, dtype=tf.int32)
     ohe = tf.one_hot(pixelcnn_inputs, K)
@@ -185,13 +185,42 @@ class ResidualBlock(layers.Layer):
         return layers.add([inputs, x])
 
 
+"""
 # To-do
 class GatedPixelCnn(tf.keras.Model):
     def __init__(self, K, in_channels=64, n_layers=15, n_filters=256):
         super(GatedPixelCnn, self).__init__(name="gated_pixel_cnn")
         self.embedding = tf.keras.layers.Embedding(K, in_channels)
         self.in_conv = PixelConvLayer(mask_type="A", filters=128, kernel_size=7, activation="relu", padding="same")
+    
+    def train_step(self, data):
+        # input conv layer
+        # logger.info("Building CONV_IN")
+        net = conv(self.inputs, conf.gated_conv_num_feature_maps, [7, 7], "A", num_channels, scope="CONV_IN")
 
+        # main gated layers
+        for idx in xrange(conf.gated_conv_num_layers):
+            scope = 'GATED_CONV%d' % idx
+            net = gated_conv(net, [3, 3], num_channels, scope=scope)
+            logger.info("Building %s" % scope)
+
+        # output conv layers
+        net = tf.nn.relu(conv(net, conf.output_conv_num_feature_maps, [1, 1], "B", num_channels, scope='CONV_OUT0'))
+        logger.info("Building CONV_OUT0")
+        self.logits = tf.nn.relu(
+            conv(net, q_levels * num_channels, [1, 1], "B", num_channels, scope='CONV_OUT1'))  # shape [N,H,W,DC]
+        logger.info("Building CONV_OUT1")
+
+        if (num_channels > 1):
+            self.logits = tf.reshape(self.logits, [-1, height, width, q_levels,
+                                                   num_channels])  # shape [N,H,W,DC] -> [N,H,W,D,C]
+            self.logits = tf.transpose(self.logits,
+                                       perm=[0, 1, 2, 4, 3])  # shape [N,H,W,D,C] -> [N,H,W,C,D]
+
+        flattened_logits = tf.reshape(self.logits, [-1, q_levels])  # [N,H,W,C,D] -> [NHWC,D]
+        target_pixels_loss = tf.reshape(self.target_pixels, [-1])  # [N,H,W,C] -> [NHWC]
+
+"""
 
 
 
