@@ -18,7 +18,8 @@ class VectorQuantizer(layers.Layer):
         w_init = tf.random_uniform_initializer()
         self.embeddings = tf.Variable(
             initial_value=w_init(
-                shape=(self.embedding_dim, self.num_embeddings), dtype="float32"
+                shape = (self.embedding_dim, self.num_embeddings), dtype = "float32"
+                # shape=(self.num_embeddings, self.embedding_dim), dtype="float32"
             ),
             trainable=True,
             name="embeddings_vqvae",
@@ -63,25 +64,28 @@ class VectorQuantizer(layers.Layer):
 # Encoder and decoder
 
 
-def get_encoder(latent_dim=16, input_shape=[]):
+def get_encoder(latent_dim=128, input_shape=[]):
     encoder_inputs = keras.Input(shape=input_shape)
-    x = layers.Conv2D(latent_dim, 3, activation="relu", strides=2, padding="same")(
+    x = layers.Conv2D(32, 3, activation="relu", strides=2, padding="same")(
         encoder_inputs
     )
-    x = layers.Conv2D(latent_dim, 3, activation="relu", strides=2, padding="same")(x)
+    x = layers.Conv2D(64, 3, activation="relu", strides=2, padding="same")(x)
     output_channel = input_shape[2]
-    encoder_outputs = layers.Conv2D(latent_dim, output_channel, padding="same")(x)
+    # encoder_outputs = layers.Conv2D(latent_dim, output_channel, padding="same")(x)
+    encoder_outputs = layers.Conv2D(latent_dim, kernel_size=1, padding="same")(x)
+
     return keras.Model(encoder_inputs, encoder_outputs, name="encoder")
 
 
-def get_decoder(latent_dim=16, input_shape=[]):
-    latent_inputs = keras.Input(shape=get_encoder(latent_dim, input_shape=input_shape).output.shape[1:])
-    x = layers.Conv2DTranspose(latent_dim, 3, activation="relu", strides=2, padding="same")(
-        latent_inputs
-    )
-    x = layers.Conv2DTranspose(latent_dim, 3, activation="relu", strides=2, padding="same")(x)
+def get_decoder(latent_dim=128, input_shape=[]):
     output_channel = input_shape[2]
-    decoder_outputs = layers.Conv2DTranspose(output_channel, 3, padding="same")(x)
+    latent_inputs = keras.Input(shape=get_encoder(latent_dim, input_shape=input_shape).output.shape[1:])
+
+    x = layers.Conv2DTranspose(64, 3, activation="relu", strides=2, padding="same")(latent_inputs)
+    x = layers.Conv2DTranspose(32, 3, activation="relu", strides=2, padding="same")(x)
+
+    decoder_outputs = layers.Conv2DTranspose(output_channel, 3, strides=1, activation="sigmoid", padding="same")(x)
+
     return keras.Model(latent_inputs, decoder_outputs, name="decoder")
 
 
@@ -185,43 +189,81 @@ class ResidualBlock(layers.Layer):
         return layers.add([inputs, x])
 
 
-"""
-# To-do
-class GatedPixelCnn(tf.keras.Model):
-    def __init__(self, K, in_channels=64, n_layers=15, n_filters=256):
-        super(GatedPixelCnn, self).__init__(name="gated_pixel_cnn")
-        self.embedding = tf.keras.layers.Embedding(K, in_channels)
-        self.in_conv = PixelConvLayer(mask_type="A", filters=128, kernel_size=7, activation="relu", padding="same")
-    
-    def train_step(self, data):
-        # input conv layer
-        # logger.info("Building CONV_IN")
-        net = conv(self.inputs, conf.gated_conv_num_feature_maps, [7, 7], "A", num_channels, scope="CONV_IN")
+# Define the VQ-VAE model
+class VQVAE(keras.Model):
+    def __init__(self, num_embeddings, embedding_dim, num_latent_vars=128, beta=0.25):
+        super().__init__()
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.num_latent_vars = num_latent_vars
+        self.beta = beta
+        self.encoder = keras.Sequential([
+            keras.layers.Conv2D(filters=32, kernel_size=4, strides=2, activation='relu', padding='same'),
+            keras.layers.Conv2D(filters=64, kernel_size=4, strides=2, activation='relu', padding='same'),
+            keras.layers.Conv2D(filters=128, kernel_size=4, strides=2, activation='relu', padding='same'),
+            keras.layers.Conv2D(filters=num_latent_vars, kernel_size=1, strides=1, activation=None, padding='valid')
+        ])
+        self.decoder = keras.Sequential([
+            keras.layers.Conv2DTranspose(filters=128, kernel_size=4, strides=2, activation='relu', padding='same'),
+            keras.layers.Conv2DTranspose(filters=64, kernel_size=4, strides=2, activation='relu', padding='same'),
+            keras.layers.Conv2DTranspose(filters=32, kernel_size=4, strides=2, activation='relu', padding='same'),
+            keras.layers.Conv2DTranspose(filters=3, kernel_size=1, strides=1, activation=None, padding='valid')
+        ])
+        self.vq_layer = VectorQuantizer(num_embeddings, embedding_dim, beta, name="vector_quantizer")
+        # self.vq_layer = VQLayer(num_embeddings, embedding_dim, beta)
 
-        # main gated layers
-        for idx in xrange(conf.gated_conv_num_layers):
-            scope = 'GATED_CONV%d' % idx
-            net = gated_conv(net, [3, 3], num_channels, scope=scope)
-            logger.info("Building %s" % scope)
+    def encode(self, inputs):
+        return self.encoder(inputs)
 
-        # output conv layers
-        net = tf.nn.relu(conv(net, conf.output_conv_num_feature_maps, [1, 1], "B", num_channels, scope='CONV_OUT0'))
-        logger.info("Building CONV_OUT0")
-        self.logits = tf.nn.relu(
-            conv(net, q_levels * num_channels, [1, 1], "B", num_channels, scope='CONV_OUT1'))  # shape [N,H,W,DC]
-        logger.info("Building CONV_OUT1")
+    def decode(self, latent_vars):
+        return self.decoder(latent_vars)
 
-        if (num_channels > 1):
-            self.logits = tf.reshape(self.logits, [-1, height, width, q_levels,
-                                                   num_channels])  # shape [N,H,W,DC] -> [N,H,W,D,C]
-            self.logits = tf.transpose(self.logits,
-                                       perm=[0, 1, 2, 4, 3])  # shape [N,H,W,D,C] -> [N,H,W,C,D]
+    def call(self, inputs):
+        # Encode the inputs
+        latent_vars = self.encode(inputs)
 
-        flattened_logits = tf.reshape(self.logits, [-1, q_levels])  # [N,H,W,C,D] -> [NHWC,D]
-        target_pixels_loss = tf.reshape(self.target_pixels, [-1])  # [N,H,W,C] -> [NHWC]
+        # Quantize the latent
+        quantized = self.vq_layer(latent_vars)
 
-"""
+        # Decode the quantized latent variables
+        reconstructed = self.decode(quantized)
+
+        return reconstructed
 
 
+class VQLayer(keras.layers.Layer):
+    def __init__(self, num_embeddings, embedding_dim, beta=0.25):
+        super().__init__()
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.beta = beta
+        self.embedding = self.add_weight(
+            shape=(num_embeddings, embedding_dim),
+            initializer='glorot_uniform',
+            trainable=True,
+            name='embedding'
+        )
+
+    def call(self, inputs):
+        # Reshape inputs to 2D tensor
+        flat_inputs = tf.reshape(inputs, [-1, self.embedding_dim])
+
+        # Compute distances between inputs and embeddings
+        distances = tf.reduce_sum(tf.square(tf.expand_dims(flat_inputs, axis=1) - self.embedding), axis=2)
+
+        # Find the closest embeddings
+        embedding_indices = tf.argmin(distances, axis=1)
+
+        # Convert embedding indices back to original shape
+        embedding_indices = tf.reshape(embedding_indices, tf.shape(inputs)[:-1])
+
+        # Look up the closest embeddings
+        closest_embeddings = tf.nn.embedding_lookup(self.embedding, embedding_indices)
+
+        # Quantize the input
+        # quantized = closest_embeddings + tf.stop_gradient(quantized - closest_embeddings)
+        quantized = closest_embeddings + tf.stop_gradient(inputs - closest_embeddings)
+
+        return quantized
 
 

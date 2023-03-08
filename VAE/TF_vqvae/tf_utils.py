@@ -105,7 +105,6 @@ def show_sampling(latent, recon, save_path, gray=False):
         plt.axis("off")
 
         plt.subplot(10, 2, 2 + i * 2)
-        plt.subplot(10, 3, 3 + i * 3)
         if gray:
             plt.imshow(recon[i], cmap="gray")
         else:
@@ -168,7 +167,7 @@ def get_fid_score(real_image, gen_image):
 
 
 def get_psnr(real, generated):
-    psnr_value = tf.reduce_mean(tf.image.psnr(generated, real, max_val=256.0))
+    psnr_value = tf.reduce_mean(tf.image.psnr(generated, real, max_val=255.0))
     return psnr_value
 
 

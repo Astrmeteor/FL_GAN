@@ -11,8 +11,8 @@ from tensorflow_privacy.privacy.optimizers.dp_optimizer_vectorized import Vector
 from tensorflow_privacy.privacy.analysis import compute_dp_sgd_privacy
 from keras import layers
 
-from tf_model import get_vqvae, get_pixel_cnn
-from tf_utils import load_data, get_labels, show_batch, show_latent, show_sampling, get_fid_score, get_inception_score
+from tf_model import get_vqvae, get_pixel_cnn, VQVAE
+from tf_utils import load_data, get_labels, show_batch, show_latent, show_sampling, get_fid_score, get_inception_score, get_psnr
 
 import argparse
 import os
@@ -20,9 +20,9 @@ import pandas as pd
 import warnings
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-warnings.filterwarnings('ignore', category=DeprecationWarning)
-warnings.filterwarnings('ignore', category=PendingDeprecationWarning)
-warnings.filterwarnings("default")
+warnings.filterwarnings('ignore') #, category=DeprecationWarning)
+# warnings.filterwarnings('ignore', category=PendingDeprecationWarning)
+# warnings.filterwarnings("default")
 # parser
 
 parser = argparse.ArgumentParser(
@@ -57,7 +57,7 @@ parser.add_argument("--micro_batch", "-mc", type=int, default=200,
 parser.add_argument("--dataset_len", "-len", type=int, default=60000,
                     help="Number of dataset, 600000 for MNIST")
 
-parser.add_argument("--latent_dim", "-D", type=int, default=64,
+parser.add_argument("--latent_dim", "-D", type=int, default=128,
                     help="Embedding dimension")
 
 parser.add_argument("--num_embeddings", "-K", type=int, default=256,
@@ -89,7 +89,8 @@ class VQVAETrainer(keras.models.Model):
         self.num_embeddings = num_embeddings
 
         self.data_shape = data_shape
-        self.vqvae = get_vqvae(self.latent_dim, self.num_embeddings, data_shape)
+        # self.vqvae = get_vqvae(self.latent_dim, self.num_embeddings, data_shape)
+        self.vqvae = VQVAE(self.num_embeddings, self.latent_dim)
 
         self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
         self.reconstruction_loss_tracker = keras.metrics.Mean(
@@ -118,7 +119,6 @@ class VQVAETrainer(keras.models.Model):
 
         # Backpropagation
         grads = tape.gradient(total_loss, self.vqvae.trainable_variables)
-        # grads, _ = self.optimizer._compute_gradients(total_loss, var_list=self.vqvae.trainable_variables, tape=tape)
 
         self.optimizer.apply_gradients(zip(grads, self.vqvae.trainable_variables))
 
@@ -204,7 +204,7 @@ def main():
             noise_multiplier=args.noise_multiplier,
             num_microbatches=args.micro_batch,
             learning_rate=args.learning_rate,
-            epsilon= 1.0
+            epsilon=1.0
         )
     else:
         print("Processing in normal")
@@ -239,7 +239,7 @@ def main():
     if not os.path.exists(reconstruction_path_traditional_flow):
         os.makedirs(reconstruction_path_traditional_flow)
 
-    truth_path = reconstruction_path_traditional_flow + "/grand_truth_images.png"
+    truth_path = reconstruction_path_traditional_flow + f"/grand_truth_images_{args.epochs}.png"
     trained_vqvae_model = vqvae_trainer.vqvae
     # idx = np.random.choice(len(test_data), args.recon_num)
     idx = args.recon_num
@@ -253,34 +253,46 @@ def main():
     batch_size = int(pow(args.recon_num, 0.5))
     # reconstruction_images = trained_vqvae_model.predict(tf.convert_to_tensor(test_images))
     reconstruction_images = trained_vqvae_model.predict(test_images)
-    reconstruction_save_path = reconstruction_path_traditional_flow + "/reconstruction_image.png"
+    reconstruction_save_path = reconstruction_path_traditional_flow + f"/reconstruction_image_{args.epochs}.png"
 
     # test_x = tf.tile(test_data, [1, 1, 1, 3])
     # recon_x = tf.tile(reconstruction_image, [1, 1, 1, 3])
-    fid = get_fid_score(test_images, reconstruction_images)
-    print(f"Compare test images with reconstruction images, FID: {fid}")
 
-    inception_score = get_inception_score(reconstruction_images)
-    print(f"Compute reconstruction images, IS: {inception_score}")
+    # Return the [0, 1] to [0, 255]
+    fid = get_fid_score(tf.cast(test_images * 255, tf.uint8), tf.cast(reconstruction_images * 255, tf.uint8))
+    print(f"Compare test images with reconstruction images, FID: {fid:.2f}")
 
-    show_batch(test_images, batch_size, truth_path, True if test_images.shape[3] == 3 else False)
-    show_batch(reconstruction_images, batch_size, reconstruction_save_path, True if reconstruction_images.shape[3] == 3 else False)
+    inception_score = get_inception_score(tf.cast(reconstruction_images * 255, tf.uint8))
+    print(f"Compute reconstruction images, IS: {inception_score:.2f}")
+
+    psnr = get_psnr(tf.cast(test_images * 255, tf.uint8), tf.cast(reconstruction_images * 255, tf.uint8))
+    print(f"Peak Signal-to-Noise Ratio, PSNR: {psnr:.2f}")
+
+    show_batch(test_images, batch_size, truth_path, False if test_images.shape[3] == 3 else True)
+    show_batch(reconstruction_images, batch_size, reconstruction_save_path, False if reconstruction_images.shape[3] == 3 else True)
 
     """
     ## Visualizing the discrete codes
     """
 
-    encoder = vqvae_trainer.vqvae.get_layer("encoder")
-    quantizer = vqvae_trainer.vqvae.get_layer("vector_quantizer")
+    # encoder = vqvae_trainer.vqvae.get_layer("encoder")
+    encoder = vqvae_trainer.vqvae.encode
+    # quantizer = vqvae_trainer.vqvae.get_layer("vector_quantizer")
+    quantizer = vqvae_trainer.vqvae.vq_layer
 
-    encoded_outputs = encoder.predict(test_images)
-    flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
-    codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
+    # encoded_outputs = encoder.predict(test_images)
+    encoded_outputs = encoder(test_images)
+
+    # flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
+    flat_enc_outputs = encoded_outputs.numpy().reshape(-1, encoded_outputs.shape[-1])
+
+    # codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
+    codebook_indices = quantizer(flat_enc_outputs)
     codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
 
-    latent_save_path = reconstruction_path_traditional_flow + "/latent_image.png"
+    latent_save_path = reconstruction_path_traditional_flow + f"/latent_image_{args.epochs}.png"
     show_latent(test_images[:args.latent_num], codebook_indices[:args.latent_num], reconstruction_images[:args.latent_num],
-                latent_save_path, True if test_images.shape[3] == 3 else False)
+                latent_save_path, False if test_images.shape[3] == 3 else True)
 
     """
     ## PixelCNN hyper parameters
@@ -297,8 +309,9 @@ def main():
     """
 
     # Generate the codebook indices.
-    encoded_outputs = encoder.predict(train_data)
-    flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
+    # encoded_outputs = encoder.predict(train_data)
+    encoded_outputs = encoder(train_data)
+    flat_enc_outputs = encoded_outputs.numpy().reshape(-1, encoded_outputs.shape[-1])
     codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
 
     codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
@@ -332,8 +345,8 @@ def main():
         idx = np.random.choice(len(test_data), int(len(test_data)*0.8))
         test_images = test_data[idx]
 
-        encoded_outputs = encoder.predict(test_images)
-        flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
+        encoded_outputs = encoder(test_images)
+        flat_enc_outputs = encoded_outputs.numpy().reshape(-1, encoded_outputs.shape[-1])
         codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
 
         codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
@@ -350,6 +363,7 @@ def main():
 
     pixel_cnn_acc_save_path = pixel_cnn_save_path + f"/pixel_cnn_acc_{args.epochs}.csv"
     pd.DataFrame(ar_acc).to_csv(pixel_cnn_acc_save_path, index=False)
+
     """
     ## Codebook sampling
     """
@@ -388,10 +402,11 @@ def main():
     decoder = vqvae_trainer.vqvae.get_layer("decoder")
     generated_samples = decoder.predict(quantized)
 
-    sampling_save_path = reconstruction_path_traditional_flow + "/sampling_image.png"
-    show_sampling(priors, generated_samples, sampling_save_path, True if generated_samples.shape[3] == 3 else False)
-    inception_score = get_inception_score(generated_samples)
-    print(f"Compute sampling images, IS: {inception_score}")
+    sampling_save_path = reconstruction_path_traditional_flow + f"/sampling_image_{args.epochs}.png"
+    show_sampling(priors, generated_samples, sampling_save_path, False if generated_samples.shape[3] == 3 else True)
+
+    inception_score = get_inception_score(tf.cast(generated_samples * 255, tf.uint8))
+    print(f"Compute sampling images, IS: {inception_score:.2f}")
 
 
 if __name__ == "__main__":
