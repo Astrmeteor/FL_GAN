@@ -84,7 +84,7 @@ def get_decoder(latent_dim=128, input_shape=[]):
     x = layers.Conv2DTranspose(64, 3, activation="relu", strides=2, padding="same")(latent_inputs)
     x = layers.Conv2DTranspose(32, 3, activation="relu", strides=2, padding="same")(x)
 
-    decoder_outputs = layers.Conv2DTranspose(output_channel, 3, strides=1, activation="sigmoid", padding="same")(x)
+    decoder_outputs = layers.Conv2DTranspose(output_channel, 3, strides=1, padding="same")(x)
 
     return keras.Model(latent_inputs, decoder_outputs, name="decoder")
 
@@ -200,17 +200,16 @@ class VQVAE(keras.Model):
         self.encoder = keras.Sequential([
             keras.layers.Conv2D(filters=32, kernel_size=4, strides=2, activation='relu', padding='same'),
             keras.layers.Conv2D(filters=64, kernel_size=4, strides=2, activation='relu', padding='same'),
-            keras.layers.Conv2D(filters=128, kernel_size=4, strides=2, activation='relu', padding='same'),
             keras.layers.Conv2D(filters=num_latent_vars, kernel_size=1, strides=1, activation=None, padding='valid')
         ])
         self.decoder = keras.Sequential([
-            keras.layers.Conv2DTranspose(filters=128, kernel_size=4, strides=2, activation='relu', padding='same'),
+            keras.layers.Conv2DTranspose(filters=num_latent_vars, kernel_size=4, strides=2, activation='relu', padding='same'),
             keras.layers.Conv2DTranspose(filters=64, kernel_size=4, strides=2, activation='relu', padding='same'),
             keras.layers.Conv2DTranspose(filters=32, kernel_size=4, strides=2, activation='relu', padding='same'),
             keras.layers.Conv2DTranspose(filters=3, kernel_size=1, strides=1, activation=None, padding='valid')
         ])
-        self.vq_layer = VectorQuantizer(num_embeddings, embedding_dim, beta, name="vector_quantizer")
-        # self.vq_layer = VQLayer(num_embeddings, embedding_dim, beta)
+        # self.vq_layer = VectorQuantizer(num_embeddings, embedding_dim, beta, name="vector_quantizer")
+        self.vq_layer = VQLayer(num_embeddings, embedding_dim, beta)
 
     def encode(self, inputs):
         return self.encoder(inputs)
@@ -243,6 +242,21 @@ class VQLayer(keras.layers.Layer):
             trainable=True,
             name='embedding'
         )
+
+    def get_indicies(self, inputs):
+        # Reshape inputs to 2D tensor
+        flat_inputs = tf.reshape(inputs, [-1, self.embedding_dim])
+
+        # Compute distances between inputs and embeddings
+        distances = tf.reduce_sum(tf.square(tf.expand_dims(flat_inputs, axis=1) - self.embedding), axis=2)
+
+        # Find the closest embeddings
+        embedding_indices = tf.argmin(distances, axis=1)
+
+        # Convert embedding indices back to original shape
+        embedding_indices = tf.reshape(embedding_indices, tf.shape(inputs)[:-1])
+
+        return embedding_indices
 
     def call(self, inputs):
         # Reshape inputs to 2D tensor
