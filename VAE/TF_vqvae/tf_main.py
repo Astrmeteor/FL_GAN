@@ -11,7 +11,7 @@ from tensorflow_privacy.privacy.optimizers.dp_optimizer_vectorized import Vector
 from tensorflow_privacy.privacy.analysis import compute_dp_sgd_privacy
 from keras import layers
 
-from tf_model import get_vqvae, get_pixel_cnn, VQVAE
+from tf_model import get_vqvae, get_pixel_cnn
 from tf_utils import load_data, get_labels, show_batch, show_latent, show_sampling, get_fid_score, get_inception_score, get_psnr
 
 import argparse
@@ -20,7 +20,9 @@ import pandas as pd
 import warnings
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-warnings.filterwarnings('ignore') #, category=DeprecationWarning)
+warnings.filterwarnings('ignore')
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+#, category=DeprecationWarning)
 # warnings.filterwarnings('ignore', category=PendingDeprecationWarning)
 # warnings.filterwarnings("default")
 # parser
@@ -57,7 +59,7 @@ parser.add_argument("--micro_batch", "-mc", type=int, default=200,
 parser.add_argument("--dataset_len", "-len", type=int, default=60000,
                     help="Number of dataset, 600000 for MNIST")
 
-parser.add_argument("--latent_dim", "-D", type=int, default=128,
+parser.add_argument("--embedding_dim", "-D", type=int, default=128,
                     help="Embedding dimension")
 
 parser.add_argument("--num_embeddings", "-K", type=int, default=256,
@@ -82,15 +84,15 @@ args = parser.parse_args()
 
 
 class VQVAETrainer(keras.models.Model):
-    def __init__(self, train_variance, latent_dim=64, num_embeddings=128, data_shape=[], **kwargs):
+    def __init__(self, train_variance, num_embeddings=128, embedding_dim=256, data_shape=[], **kwargs):
         super().__init__(**kwargs)
         self.train_variance = train_variance
-        self.latent_dim = latent_dim
         self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
 
         self.data_shape = data_shape
-        # self.vqvae = get_vqvae(self.latent_dim, self.num_embeddings, data_shape)
-        self.vqvae = VQVAE(self.num_embeddings, self.latent_dim)
+        self.vqvae = get_vqvae(self.embedding_dim, self.num_embeddings, data_shape)
+        # self.vqvae = VQVAE(self.num_embeddings, self.embedding_dim, self.data_shape)
 
         self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
         self.reconstruction_loss_tracker = keras.metrics.Mean(
@@ -113,7 +115,6 @@ class VQVAETrainer(keras.models.Model):
             reconstructions = self.vqvae(x)
 
             # Calculate the losses.
-
             reconstruction_loss = tf.reduce_mean((x - reconstructions) ** 2) / self.train_variance
             total_loss = reconstruction_loss + sum(self.vqvae.losses)
 
@@ -189,7 +190,7 @@ def main():
     """
     data_shape = train_data.shape[1:]
     vqvae_trainer = VQVAETrainer(data_variance,
-                                 latent_dim=args.latent_dim,
+                                 embedding_dim=args.embedding_dim,
                                  num_embeddings=args.num_embeddings,
                                  data_shape=data_shape)
     print(f"Differential Privacy Switch: {args.dpsgd}")
@@ -259,39 +260,41 @@ def main():
     # recon_x = tf.tile(reconstruction_image, [1, 1, 1, 3])
 
     # Return the [0, 1] to [0, 255]
-    fid = get_fid_score(tf.cast(test_images * 255, tf.uint8), tf.cast(reconstruction_images * 255, tf.uint8))
+    fid = get_fid_score(tf.cast(test_images * 255, tf.int32), tf.cast(reconstruction_images * 255, tf.int32))
     print(f"Compare test images with reconstruction images, FID: {fid:.2f}")
 
-    inception_score = get_inception_score(tf.cast(reconstruction_images * 255, tf.uint8))
+    inception_score = get_inception_score(tf.cast(reconstruction_images * 255, tf.int32))
     print(f"Compute reconstruction images, IS: {inception_score:.2f}")
 
-    psnr = get_psnr(tf.cast(test_images * 255, tf.uint8), tf.cast(reconstruction_images * 255, tf.uint8))
+    psnr = get_psnr(tf.cast(test_images * 255, tf.int32), tf.cast(reconstruction_images * 255, tf.int32))
     print(f"Peak Signal-to-Noise Ratio, PSNR: {psnr:.2f}")
 
     show_batch(test_images, batch_size, truth_path, False if test_images.shape[3] == 3 else True)
-    show_batch(reconstruction_images, batch_size, reconstruction_save_path, False if reconstruction_images.shape[3] == 3 else True)
+    show_batch(tf.cast(reconstruction_images * 255, tf.int32), batch_size, reconstruction_save_path, False if reconstruction_images.shape[3] == 3 else True)
 
     """
     ## Visualizing the discrete codes
     """
 
-    # encoder = vqvae_trainer.vqvae.get_layer("encoder")
-    encoder = vqvae_trainer.vqvae.encode
-    # quantizer = vqvae_trainer.vqvae.get_layer("vector_quantizer")
-    quantizer = vqvae_trainer.vqvae.vq_layer
+    encoder = vqvae_trainer.vqvae.get_layer("encoder")
+    # encoder = vqvae_trainer.vqvae.encode
+    quantizer = vqvae_trainer.vqvae.get_layer("vector_quantizer")
+    # quantizer = vqvae_trainer.vqvae.vq_layer
 
-    # encoded_outputs = encoder.predict(test_images)
-    encoded_outputs = encoder(test_images)
+    encoded_outputs = encoder.predict(test_images)
+    # encoded_outputs = encoder(test_images)
 
-    # flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
-    flat_enc_outputs = encoded_outputs.numpy().reshape(-1, encoded_outputs.shape[-1])
+    flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
+    # flat_enc_outputs = encoded_outputs.numpy().reshape(-1, encoded_outputs.shape[-1])
 
-    # codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
     codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
+    # codebook_indices = quantizer.get_indicies(flat_enc_outputs)
     codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
 
     latent_save_path = reconstruction_path_traditional_flow + f"/latent_image_{args.epochs}.png"
-    show_latent(test_images[:args.latent_num], codebook_indices[:args.latent_num], reconstruction_images[:args.latent_num],
+    show_latent(test_images[:args.latent_num],
+                codebook_indices[:args.latent_num],
+                tf.cast(reconstruction_images[:args.latent_num] * 255, tf.int32),
                 latent_save_path, False if test_images.shape[3] == 3 else True)
 
     """
@@ -300,7 +303,7 @@ def main():
 
     pixelcnn_input_shape = encoded_outputs.shape[1:-1]
     print(f"Input shape of the PixelCNN: {pixelcnn_input_shape}")
-    pixel_cnn = get_pixel_cnn(pixelcnn_input_shape, args.num_embeddings)
+    pixel_cnn = get_pixel_cnn(pixelcnn_input_shape, args.num_embeddings, quantizer.get_code_indices)
 
     # pixel_cnn.summary()
 
@@ -309,12 +312,17 @@ def main():
     """
 
     # Generate the codebook indices.
-    # encoded_outputs = encoder.predict(train_data)
-    encoded_outputs = encoder(train_data)
-    flat_enc_outputs = encoded_outputs.numpy().reshape(-1, encoded_outputs.shape[-1])
-    codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
+    encoded_outputs = encoder.predict(train_data, batch_size=64)
+    # encoded_outputs = encoder(train_data)
+    flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
 
-    codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
+    codebook_indices = np.array([])
+    for i in range(int(flat_enc_outputs.shape[0]/1000)):
+        codebook_indices = np.concatenate((codebook_indices, quantizer.get_code_indices(flat_enc_outputs[i*1000: (i+1)*1000]).numpy()), axis=0)
+
+    # codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
+
+    codebook_indices = codebook_indices.reshape(encoded_outputs.shape[:-1])
     print(f"Shape of the training data for PixelCNN: {codebook_indices.shape}")
 
     """
@@ -345,8 +353,8 @@ def main():
         idx = np.random.choice(len(test_data), int(len(test_data)*0.8))
         test_images = test_data[idx]
 
-        encoded_outputs = encoder(test_images)
-        flat_enc_outputs = encoded_outputs.numpy().reshape(-1, encoded_outputs.shape[-1])
+        encoded_outputs = encoder.predict(test_images)
+        flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
         codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
 
         codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
@@ -393,24 +401,24 @@ def main():
     # Perform an embedding lookup.
     pretrained_embeddings = quantizer.embeddings
 
-    """
     priors_ohe = tf.one_hot(priors.astype("int32"), vqvae_trainer.num_embeddings).numpy()
     quantized = tf.matmul(
         priors_ohe.astype("float32"), pretrained_embeddings, transpose_b=True
     )
     quantized = tf.reshape(quantized, (-1, *(encoded_outputs.shape[1:])))
-    """
 
-    quantized = tf.nn.embedding_lookup(quantizer.embeddings, priors.astype(int))
+
+    # quantized = tf.nn.embedding_lookup(quantizer.embeddings, priors.astype(int))
 
     # Generate novel images.
-    decoder = vqvae_trainer.vqvae.decode
-    generated_samples = decoder(quantized)
+    decoder = vqvae_trainer.vqvae.get_layer("decoder")
+    generated_samples = decoder.predict(quantized)
 
     sampling_save_path = reconstruction_path_traditional_flow + f"/sampling_image_{args.epochs}.png"
-    show_sampling(priors, generated_samples, sampling_save_path, False if generated_samples.shape[3] == 3 else True)
+    show_sampling(priors,
+                  tf.cast(generated_samples * 255, tf.int32), sampling_save_path, False if generated_samples.shape[3] == 3 else True)
 
-    inception_score = get_inception_score(tf.cast(generated_samples * 255, tf.uint8))
+    inception_score = get_inception_score(tf.cast(generated_samples * 255, tf.int8))
     print(f"Compute sampling images, IS: {inception_score:.2f}")
 
 

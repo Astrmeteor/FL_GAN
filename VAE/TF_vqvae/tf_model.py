@@ -8,8 +8,8 @@ import numpy as np
 class VectorQuantizer(layers.Layer):
     def __init__(self, num_embeddings, embedding_dim, beta=0.25, **kwargs):
         super().__init__(**kwargs)
-        self.embedding_dim = embedding_dim
         self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
 
         # The `beta` parameter is best kept between [0.25, 2] as per the paper.
         self.beta = beta
@@ -19,7 +19,6 @@ class VectorQuantizer(layers.Layer):
         self.embeddings = tf.Variable(
             initial_value=w_init(
                 shape = (self.embedding_dim, self.num_embeddings), dtype = "float32"
-                # shape=(self.num_embeddings, self.embedding_dim), dtype="float32"
             ),
             trainable=True,
             name="embeddings_vqvae",
@@ -70,7 +69,6 @@ def get_encoder(latent_dim=128, input_shape=[]):
         encoder_inputs
     )
     x = layers.Conv2D(64, 3, activation="relu", strides=2, padding="same")(x)
-    output_channel = input_shape[2]
     # encoder_outputs = layers.Conv2D(latent_dim, output_channel, padding="same")(x)
     encoder_outputs = layers.Conv2D(latent_dim, kernel_size=1, padding="same")(x)
 
@@ -84,7 +82,7 @@ def get_decoder(latent_dim=128, input_shape=[]):
     x = layers.Conv2DTranspose(64, 3, activation="relu", strides=2, padding="same")(latent_inputs)
     x = layers.Conv2DTranspose(32, 3, activation="relu", strides=2, padding="same")(x)
 
-    decoder_outputs = layers.Conv2DTranspose(output_channel, 3, strides=1, padding="same")(x)
+    decoder_outputs = layers.Conv2DTranspose(output_channel, 3, activation="sigmoid", strides=1, padding="same")(x)
 
     return keras.Model(latent_inputs, decoder_outputs, name="decoder")
 
@@ -105,7 +103,7 @@ def get_vqvae(latent_dim=16, num_embeddings=64, data_shape=[]):
     return keras.Model(inputs, reconstructions, name="vq_vae")
 
 
-def get_pixel_cnn(pixelcnn_input_shape, K):
+def get_pixel_cnn(pixelcnn_input_shape, K, get_code_indices):
     num_residual_blocks = 3
     num_pixelcnn_layers = 3
     # pixelcnn_input_shape = encoded_outputs.shape[1:-1]
@@ -188,25 +186,34 @@ class ResidualBlock(layers.Layer):
         # return tf.python.keras.layers.add([inputs, x])
         return layers.add([inputs, x])
 
-
+"""
 # Define the VQ-VAE model
 class VQVAE(keras.Model):
-    def __init__(self, num_embeddings, embedding_dim, num_latent_vars=128, beta=0.25):
+    def __init__(self, num_embeddings, embedding_dim, my_input_shape, beta=0.25):
         super().__init__()
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
-        self.num_latent_vars = num_latent_vars
         self.beta = beta
+        self.my_input_shape = my_input_shape
         self.encoder = keras.Sequential([
-            keras.layers.Conv2D(filters=32, kernel_size=4, strides=2, activation='relu', padding='same'),
-            keras.layers.Conv2D(filters=64, kernel_size=4, strides=2, activation='relu', padding='same'),
-            keras.layers.Conv2D(filters=num_latent_vars, kernel_size=1, strides=1, activation=None, padding='valid')
+            tf.keras.layers.Input(shape=my_input_shape[0:]),
+            tf.keras.layers.Conv2D(32, 4, strides=2, padding='same', activation='relu'),
+            tf.keras.layers.Conv2D(64, 4, strides=2, padding='same', activation='relu'),
+            tf.keras.layers.Conv2D(128, 4, strides=2, padding='same', activation='relu'),
+            tf.keras.layers.Conv2D(256, 4, strides=2, padding='same', activation='relu'),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(embedding_dim, activation=None)
         ])
         self.decoder = keras.Sequential([
-            keras.layers.Conv2DTranspose(filters=num_latent_vars, kernel_size=4, strides=2, activation='relu', padding='same'),
-            keras.layers.Conv2DTranspose(filters=64, kernel_size=4, strides=2, activation='relu', padding='same'),
-            keras.layers.Conv2DTranspose(filters=32, kernel_size=4, strides=2, activation='relu', padding='same'),
-            keras.layers.Conv2DTranspose(filters=3, kernel_size=1, strides=1, activation=None, padding='valid')
+            tf.keras.layers.Input(shape=(embedding_dim)),
+            tf.keras.layers.Dense(4 * 4 * 256),
+            tf.keras.layers.Reshape((4, 4, 256)),
+            # tf.keras.layers.Conv2DTranspose(256, 4, strides=2, padding='same', activation='relu'),
+            # tf.keras.layers.Conv2DTranspose(128, 4, strides=2, padding='same', activation='relu'),
+            tf.keras.layers.Conv2DTranspose(64, 4, strides=2, padding='same', activation='relu'),
+            tf.keras.layers.Conv2DTranspose(32, 4, strides=2, padding='same', activation='relu'),
+            tf.keras.layers.Conv2DTranspose(3, 4, strides=2, padding='same', activation=None),
+            tf.keras.layers.Lambda(lambda x: tf.clip_by_value(x, 0.0, 1.0))
         ])
         # self.vq_layer = VectorQuantizer(num_embeddings, embedding_dim, beta, name="vector_quantizer")
         self.vq_layer = VQLayer(num_embeddings, embedding_dim, beta)
@@ -279,5 +286,4 @@ class VQLayer(keras.layers.Layer):
         quantized = closest_embeddings + tf.stop_gradient(inputs - closest_embeddings)
 
         return quantized
-
-
+"""
