@@ -1,6 +1,7 @@
 import time
 
 import numpy as np
+import tqdm
 
 from tensorflow import keras
 import tensorflow as tf
@@ -22,9 +23,7 @@ import warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 warnings.filterwarnings('ignore')
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-#, category=DeprecationWarning)
-# warnings.filterwarnings('ignore', category=PendingDeprecationWarning)
-# warnings.filterwarnings("default")
+
 # parser
 
 parser = argparse.ArgumentParser(
@@ -35,7 +34,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument("--dpsgd", type=bool, default=False,
                     help="If True, train with DP-SGD. If False, train with vanilla SGD.")
 
-parser.add_argument("--learning_rate", "-lr", type=float, default=0.01,
+parser.add_argument("--learning_rate", "-lr", type=float, default=0.001,
                     help="Learning rate for training")
 
 parser.add_argument("--l2_norm_clip", "-clip", type=float, default=1.0,
@@ -62,11 +61,11 @@ parser.add_argument("--dataset_len", "-len", type=int, default=60000,
 parser.add_argument("--embedding_dim", "-D", type=int, default=128,
                     help="Embedding dimension")
 
-parser.add_argument("--num_embeddings", "-K", type=int, default=256,
+parser.add_argument("--num_embeddings", "-K", type=int, default=512,
                     help="Number embedding")
 
-parser.add_argument("--dataset", type=str, default="cifar10",
-                    help="Dataset: mnist, fashion-mnist, cifar10, stl")
+parser.add_argument("--dataset", type=str, default="celeb_a",
+                    help="Dataset: mnist, fashion-mnist, cifar10, stl, celeb_a")
 
 parser.add_argument("--recon_num", type=int, default=36, help="Number of reconstruction for image, must be even")
 
@@ -205,7 +204,7 @@ def main():
             noise_multiplier=args.noise_multiplier,
             num_microbatches=args.micro_batch,
             learning_rate=args.learning_rate,
-            epsilon=1.0
+            # epsilon=1.0
         )
     else:
         print("Processing in normal")
@@ -227,9 +226,9 @@ def main():
     vqvae_metric_save_path = iwantto_path + f"/{args.dataset}/v1/{'dp' if args.dpsgd else 'normal'}/metric"
     if not os.path.exists(vqvae_metric_save_path):
         os.makedirs(vqvae_metric_save_path)
-    vqvae_metric_save_path += f"/vq_vae_metrics_{args.epochs}.csv"
+    vqvae_metric_save = vqvae_metric_save_path + f"/vq_vae_metrics_{args.epochs}.csv"
     vq_vae_metrics = pd.DataFrame(history.history)
-    vq_vae_metrics.to_csv(vqvae_metric_save_path, index=False)
+    vq_vae_metrics.to_csv(vqvae_metric_save, index=False)
 
     """
     Reconstruction results on the test set
@@ -259,15 +258,20 @@ def main():
     # test_x = tf.tile(test_data, [1, 1, 1, 3])
     # recon_x = tf.tile(reconstruction_image, [1, 1, 1, 3])
 
+    info_f = open(vqvae_metric_save_path+"/info.txt", "w")
     # Return the [0, 1] to [0, 255]
     fid = get_fid_score(tf.cast(test_images * 255, tf.int32), tf.cast(reconstruction_images * 255, tf.int32))
     print(f"Compare test images with reconstruction images, FID: {fid:.2f}")
+    info_f.write(f"Compare test images with reconstruction images, FID: {fid:.2f}\n")
 
     inception_score = get_inception_score(tf.cast(reconstruction_images * 255, tf.int32))
     print(f"Compute reconstruction images, IS: {inception_score:.2f}")
+    info_f.write(f"Compute reconstruction images, IS: {inception_score:.2f}\n")
 
     psnr = get_psnr(tf.cast(test_images * 255, tf.int32), tf.cast(reconstruction_images * 255, tf.int32))
     print(f"Peak Signal-to-Noise Ratio, PSNR: {psnr:.2f}")
+    info_f.write(f"Peak Signal-to-Noise Ratio, PSNR: {psnr:.2f}\n")
+    info_f.write(f"VQ-VAE training time: {train_end:.2f}s\n")
 
     show_batch(test_images, batch_size, truth_path, False if test_images.shape[3] == 3 else True)
     show_batch(tf.cast(reconstruction_images * 255, tf.int32), batch_size, reconstruction_save_path, False if reconstruction_images.shape[3] == 3 else True)
@@ -303,7 +307,7 @@ def main():
 
     pixelcnn_input_shape = encoded_outputs.shape[1:-1]
     print(f"Input shape of the PixelCNN: {pixelcnn_input_shape}")
-    pixel_cnn = get_pixel_cnn(pixelcnn_input_shape, args.num_embeddings, quantizer.get_code_indices)
+    pixel_cnn = get_pixel_cnn(pixelcnn_input_shape, args.num_embeddings)
 
     # pixel_cnn.summary()
 
@@ -317,7 +321,7 @@ def main():
     flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
 
     codebook_indices = np.array([])
-    for i in range(int(flat_enc_outputs.shape[0]/1000)):
+    for i in tqdm.tqdm(range(int(flat_enc_outputs.shape[0]/1000))):
         codebook_indices = np.concatenate((codebook_indices, quantizer.get_code_indices(flat_enc_outputs[i*1000: (i+1)*1000]).numpy()), axis=0)
 
     # codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
@@ -328,6 +332,7 @@ def main():
     """
     ## PixelCNN training
     """
+    tf.compat.v1.reset_default_graph()
 
     pixel_cnn.compile(
         optimizer=optimizer,
@@ -346,18 +351,31 @@ def main():
     )
     pixel_end = time.time() - pixel_start
     print(f"Pixel training time: {pixel_end:.2f}s")
+    info_f.write(f"Pixel training time: {pixel_end:.2f}s\n")
 
     # Compute accuracy of autoregressive model
     ar_acc = []
-    for _ in range(args.epochs):
+    for _ in range(10):
         idx = np.random.choice(len(test_data), int(len(test_data)*0.8))
         test_images = test_data[idx]
 
-        encoded_outputs = encoder.predict(test_images)
+        encoded_outputs = encoder.predict(test_images, batch_size=64)
         flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
-        codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
 
-        codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
+        codebook_indices = np.array([])
+        for i in tqdm.tqdm(range(int(flat_enc_outputs.shape[0] / 1000))):
+            if i == int(flat_enc_outputs.shape[0] / 1000) - 1:
+                codebook_indices = np.concatenate(
+                    (codebook_indices, quantizer.get_code_indices(flat_enc_outputs[i * 1000:]).numpy()),
+                    axis=0)
+            else:
+                codebook_indices = np.concatenate(
+                    (codebook_indices, quantizer.get_code_indices(flat_enc_outputs[i * 1000: (i + 1) * 1000]).numpy()),
+                    axis=0)
+
+        # codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
+
+        codebook_indices = codebook_indices.reshape(encoded_outputs.shape[:-1])
         _, acc = pixel_cnn.evaluate(codebook_indices, codebook_indices, batch_size=args.batch_size, verbose=0)
         ar_acc.append(acc)
 
@@ -420,6 +438,8 @@ def main():
 
     inception_score = get_inception_score(tf.cast(generated_samples * 255, tf.int8))
     print(f"Compute sampling images, IS: {inception_score:.2f}")
+    info_f.write(f"Compute sampling images, IS: {inception_score:.2f}\n")
+    info_f.close()
 
 
 if __name__ == "__main__":

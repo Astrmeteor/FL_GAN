@@ -5,7 +5,6 @@ import tensorflow_gan as tfgan
 import tensorflow as tf
 import tensorflow_hub as tfhub
 import os
-import tqdm
 
 current_path = os.path.dirname(os.path.abspath(__file__))
 
@@ -31,9 +30,16 @@ def load_data(dataset):
         )
 
     elif dataset == "stl":
-        (train_data, train_labels), (test_data, test_labels) = tfds.as_numpy(
+        (train_data, train_labels), (test_data, test_labels), info= tfds.as_numpy(
             tfds.load("stl10", split=['train', 'test'], batch_size=-1, as_supervised=True)
         )
+
+    elif dataset == "celeb_a":
+        (train_data, test_data), info = tfds.as_numpy(
+            tfds.load("celeb_a", split=['train', 'test'], batch_size=-1, as_supervised=True)
+        )
+        train_labels = None
+        test_labels = None
 
     train_data = np.array(train_data, dtype=np.float32) / 255
     test_data = np.array(test_data, dtype=np.float32) / 255
@@ -42,8 +48,8 @@ def load_data(dataset):
     assert train_data.max() == 1.
     assert test_data.min() == 0.
     assert test_data.max() == 1.
-    assert train_labels.ndim == 1
-    assert test_labels.ndim == 1
+    # assert train_labels.ndim == 1
+    # assert test_labels.ndim == 1
 
     return train_data, train_labels, test_data, test_labels
 

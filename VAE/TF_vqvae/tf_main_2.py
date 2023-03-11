@@ -12,13 +12,19 @@ from tensorflow_privacy.privacy.analysis import compute_dp_sgd_privacy
 from keras import layers
 
 from tf_model import get_vqvae, get_pixel_cnn
-from tf_utils import load_data, get_labels, show_batch, show_latent, show_sampling
+from tf_utils import load_data, get_labels, show_batch, show_latent, show_sampling, get_fid_score, get_inception_score, get_psnr
 
 import argparse
 import os
 import pandas as pd
+import time
+import tqdm
+import warnings
 
 tf.compat.v1.enable_eager_execution()
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+warnings.filterwarnings('ignore')
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 # parser
 
 parser = argparse.ArgumentParser(
@@ -26,7 +32,7 @@ parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-parser.add_argument("--dpsgd", type=bool, default=True,
+parser.add_argument("--dpsgd", type=bool, default=False,
                     help="If True, train with DP-SGD. If False, train with vanilla SGD.")
 
 parser.add_argument("--learning_rate", "-lr", type=float, default=0.01,
@@ -53,7 +59,7 @@ parser.add_argument("--micro_batch", "-mc", type=int, default=100,
 parser.add_argument("--dataset_len", "-len", type=int, default=60000,
                     help="Number of dataset, 600000 for MNIST")
 
-parser.add_argument("--latent_dim", "-D", type=int, default=64,
+parser.add_argument("--embedding_dim", "-D", type=int, default=64,
                     help="Embedding dimension")
 
 parser.add_argument("--num_embeddings", "-K", type=int, default=256,
@@ -66,7 +72,9 @@ parser.add_argument("--recon_num", type=int, default=36, help="Number of reconst
 
 parser.add_argument("--latent_num", type=int, default=10, help="Number of latent for image")
 
-parser.add_argument("--sampling_num", type=int, default=10, help="Number of sampling for image" )
+parser.add_argument("--sampling_num", type=int, default=10, help="Number of sampling for image")
+
+parser.add_argument("--epsilon", type=float, default=2.0, help="Fixed value of epsilon")
 
 args = parser.parse_args()
 
@@ -77,14 +85,14 @@ args = parser.parse_args()
 
 
 class VQVAETrainer(keras.models.Model):
-    def __init__(self, train_variance, latent_dim=64, num_embeddings=128, data_shape=[], **kwargs):
+    def __init__(self, train_variance, embedding_dim=64, num_embeddings=128, data_shape=[], **kwargs):
         super().__init__(**kwargs)
         self.train_variance = train_variance
-        self.latent_dim = latent_dim
+        self.embedding_dim = embedding_dim
         self.num_embeddings = num_embeddings
 
         self.data_shape = data_shape
-        self.vqvae = get_vqvae(self.latent_dim, self.num_embeddings, data_shape)
+        self.vqvae = get_vqvae(self.embedding_dim, self.num_embeddings, data_shape)
 
         self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
         self.reconstruction_loss_tracker = keras.metrics.Mean(
@@ -195,10 +203,10 @@ def main():
     """
     data_shape = train_data.shape[1:]
     vqvae_trainer = VQVAETrainer(data_variance,
-                                 latent_dim=args.latent_dim,
+                                 embedding_dim=args.embedding_dim,
                                  num_embeddings=args.num_embeddings,
                                  data_shape=data_shape)
-    print(f"Differential Privacy Switch: {args.dpsgd}")
+    print(f"V2: Differential Privacy Switch: {args.dpsgd}")
     if args.dpsgd:
         print("Processing in Differential Privacy")
         args.dataset_len = train_data.shape[0]
@@ -218,18 +226,21 @@ def main():
 
     vqvae_trainer.compile(optimizer=optimizer, run_eagerly=True)
 
+    train_start = time.time()
     print(f"Start to training with {'DP' if args.dpsgd else 'Normal'}")
     history = vqvae_trainer.fit(
         train_data, epochs=args.epochs, batch_size=args.batch_size, callbacks=[CustomCallback()]
     )
+    train_end = time.time() - train_start
+    print(f"VQ-VAE and Pixel CNN training time: {train_end:.2f}s")
 
     # Save metrics
     vqvae_metric_save_path = iwantto_path + f"/{args.dataset}/v2/{'dp' if args.dpsgd else 'normal'}/metric"
     if not os.path.exists(vqvae_metric_save_path):
         os.makedirs(vqvae_metric_save_path)
-    vqvae_metric_save_path += f"/vq_vae_metrics_{args.epochs}.csv"
+    vqvae_metric_path = vqvae_metric_save_path + f"/vq_vae_metrics_{args.epochs}.csv"
     vq_vae_metrics = pd.DataFrame(history.history)
-    vq_vae_metrics.to_csv(vqvae_metric_save_path, index=False)
+    vq_vae_metrics.to_csv(vqvae_metric_path, index=False)
 
     """
     Reconstruction results on the test set
@@ -255,8 +266,24 @@ def main():
     reconstruction_image = trained_vqvae_model.predict(test_images)
     reconstruction_save_path = reconstruction_path_traditional_flow + "/reconstruction_image.png"
 
-    show_batch(test_images, batch_size, truth_path)
-    show_batch(reconstruction_image, batch_size, reconstruction_save_path)
+    info_f = open(vqvae_metric_save_path + "/info.txt", "w")
+
+    # Return the [0, 1] to [0, 255]
+    fid = get_fid_score(tf.cast(test_images * 255, tf.int32), tf.cast(reconstruction_image * 255, tf.int32))
+    print(f"Compare test images with reconstruction images, FID: {fid:.2f}")
+    info_f.write(f"Compare test images with reconstruction images, FID: {fid:.2f}\n")
+
+    inception_score = get_inception_score(tf.cast(reconstruction_image * 255, tf.int32))
+    print(f"Compute reconstruction images, IS: {inception_score:.2f}")
+    info_f.write(f"Compute reconstruction images, IS: {inception_score:.2f}\n")
+
+    psnr = get_psnr(tf.cast(test_images * 255, tf.int32), tf.cast(reconstruction_image * 255, tf.int32))
+    print(f"Peak Signal-to-Noise Ratio, PSNR: {psnr:.2f}")
+    info_f.write(f"Peak Signal-to-Noise Ratio, PSNR: {psnr:.2f}\n")
+    info_f.write(f"VQ-VAE and Pixel CNN training time: {train_end:.2f}s\n")
+
+    show_batch(test_images, batch_size, truth_path,  False if test_images.shape[3] == 3 else True)
+    show_batch(tf.cast(reconstruction_image * 255, tf.int32), batch_size, reconstruction_save_path, False if reconstruction_image.shape[3] == 3 else True)
 
     """
     ## Visualizing the discrete codes
@@ -271,7 +298,10 @@ def main():
     codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
 
     latent_save_path = reconstruction_path_traditional_flow + "/latent_image.png"
-    show_latent(test_images[:args.latent_num], codebook_indices[:args.latent_num], reconstruction_image[:args.latent_num], latent_save_path)
+    show_latent(test_images[:args.latent_num],
+                codebook_indices[:args.latent_num],
+                tf.cast(reconstruction_image[:args.latent_num] * 255, tf.int32),
+                latent_save_path)
 
     # Compute accuracy of autoregressive model
     pixel_cnn = vqvae_trainer.get_layer("pixel_cnn")
@@ -282,16 +312,28 @@ def main():
     )
 
     ar_acc = []
-    for _ in range(args.epochs):
+    # Test 10 times
+    for _ in range(10):
         # Random choose 80% of test data to test, fold test
         idx = np.random.choice(len(test_data), int(len(test_data) * 0.8))
         test_images = test_data[idx]
 
         encoded_outputs = encoder.predict(test_images)
         flat_enc_outputs = encoded_outputs.reshape(-1, encoded_outputs.shape[-1])
-        codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
+        # codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
 
-        codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
+        codebook_indices = np.array([])
+        for i in tqdm.tqdm(range(int(flat_enc_outputs.shape[0] / 1000))):
+            if i == int(flat_enc_outputs.shape[0] / 1000) - 1:
+                codebook_indices = np.concatenate(
+                    (codebook_indices, quantizer.get_code_indices(flat_enc_outputs[i * 1000:]).numpy()),
+                    axis=0)
+            else:
+                codebook_indices = np.concatenate(
+                    (codebook_indices, quantizer.get_code_indices(flat_enc_outputs[i * 1000: (i + 1) * 1000]).numpy()),
+                    axis=0)
+
+        codebook_indices = codebook_indices.reshape(encoded_outputs.shape[:-1])
         _, acc = pixel_cnn.evaluate(codebook_indices, codebook_indices, batch_size=args.batch_size, verbose=0)
 
         ar_acc.append(acc)
@@ -342,7 +384,14 @@ def main():
     generated_samples = decoder.predict(quantized)
 
     sampling_save_path = reconstruction_path_traditional_flow + "/sampling_image.png"
-    show_sampling(priors, generated_samples, sampling_save_path)
+    show_sampling(priors,
+                  tf.cast(generated_samples * 255, tf.int32), sampling_save_path,
+                  False if generated_samples.shape[3] == 3 else True)
+
+    inception_score = get_inception_score(tf.cast(generated_samples * 255, tf.int8))
+    print(f"Compute sampling images, IS: {inception_score:.2f}")
+    info_f.write(f"Compute sampling images, IS: {inception_score:.2f}\n")
+    info_f.close()
 
 
 if __name__ == "__main__":

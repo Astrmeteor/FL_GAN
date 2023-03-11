@@ -103,7 +103,7 @@ def get_vqvae(latent_dim=16, num_embeddings=64, data_shape=[]):
     return keras.Model(inputs, reconstructions, name="vq_vae")
 
 
-def get_pixel_cnn(pixelcnn_input_shape, K, get_code_indices):
+def get_pixel_cnn(pixelcnn_input_shape, K):
     num_residual_blocks = 3
     num_pixelcnn_layers = 3
     # pixelcnn_input_shape = encoded_outputs.shape[1:-1]
