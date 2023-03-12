@@ -35,7 +35,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument("--dpsgd", type=bool, default=False,
                     help="If True, train with DP-SGD. If False, train with vanilla SGD.")
 
-parser.add_argument("--learning_rate", "-lr", type=float, default=0.01,
+parser.add_argument("--learning_rate", "-lr", type=float, default=0.001,
                     help="Learning rate for training")
 
 parser.add_argument("--l2_norm_clip", "-clip", type=float, default=1.0,
@@ -76,6 +76,8 @@ parser.add_argument("--sampling_num", type=int, default=10, help="Number of samp
 
 parser.add_argument("--epsilon", type=float, default=2.0, help="Fixed value of epsilon")
 
+parser.add_argument("--test_num", type=int, default=1, help="Number of test accuracy")
+
 args = parser.parse_args()
 
 
@@ -103,6 +105,8 @@ class VQVAETrainer(keras.models.Model):
         self.total_pixel_cnn_loss_tracker = keras.metrics.Mean(name="total_cnn_loss")
         self.acc_tracker = keras.metrics.Accuracy(name="acc")
 
+        self.extra_time = keras.metrics.Sum(name="extra time")
+
         self.pixel_cnn = get_pixel_cnn([int(data_shape[0]/4), int(data_shape[0]/4)], num_embeddings)
 
     @property
@@ -112,7 +116,8 @@ class VQVAETrainer(keras.models.Model):
             self.reconstruction_loss_tracker,
             self.vq_loss_tracker,
             self.total_pixel_cnn_loss_tracker,
-            self.acc_tracker
+            self.acc_tracker,
+            self.extra_time
         ]
 
     # @tf.function
@@ -134,6 +139,7 @@ class VQVAETrainer(keras.models.Model):
 
         # Training of Pixel CNN
         with tf.GradientTape() as tape2:
+            extra_time = time.time()
             encoder = self.vqvae.get_layer("encoder")
             quantizer = self.vqvae.get_layer("vector_quantizer")
             encoded_outputs = encoder(x).numpy()
@@ -142,6 +148,8 @@ class VQVAETrainer(keras.models.Model):
             codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
 
             codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
+            extra_time = time.time() - extra_time
+
             ar = self.pixel_cnn(codebook_indices)
             ar_loss = keras.losses.SparseCategoricalCrossentropy(from_logits=True)(codebook_indices, ar)
             # ar_loss = keras.losses.CategoricalCrossentropy(from_logits=True)(codebook_indices, ar)
@@ -157,7 +165,8 @@ class VQVAETrainer(keras.models.Model):
 
         self.total_pixel_cnn_loss_tracker.update_state(ar_loss)
         self.acc_tracker.update_state(y_true=codebook_indices, y_pred=tf.argmax(ar, 3))
-        # self.acc_tracker.update_state(y_true=codebook_indices, y_pred=ar)
+
+        self.extra_time.update_state(extra_time)
 
         # Log results.
         return {
@@ -165,7 +174,8 @@ class VQVAETrainer(keras.models.Model):
             "reconstruction_loss": self.reconstruction_loss_tracker.result(),
             "vqvae_loss": self.vq_loss_tracker.result(),
             "Pixel loss": self.total_pixel_cnn_loss_tracker.result(),
-            "Pixel accuracy": self.acc_tracker.result()
+            "Pixel accuracy": self.acc_tracker.result(),
+            "Extra time": self.extra_time.result()
         }
 
 
@@ -221,7 +231,6 @@ def main():
         )
     else:
         print("Processing in normal")
-        # optimizer = tf.optimizers.Adam(learning_rate=args.learning_rate)
         optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=args.learning_rate)
 
     vqvae_trainer.compile(optimizer=optimizer, run_eagerly=True)
@@ -229,9 +238,10 @@ def main():
     train_start = time.time()
     print(f"Start to training with {'DP' if args.dpsgd else 'Normal'}")
     history = vqvae_trainer.fit(
-        train_data, epochs=args.epochs, batch_size=args.batch_size, callbacks=[CustomCallback()]
+        train_data, epochs=args.epochs, batch_size=args.batch_size, callbacks=[CustomCallback()], verbose=1
     )
-    train_end = time.time() - train_start
+    train_end = time.time() - train_start - history.history["Extra time"][0]
+
     print(f"VQ-VAE and Pixel CNN training time: {train_end:.2f}s")
 
     # Save metrics
@@ -251,7 +261,7 @@ def main():
     if not os.path.exists(reconstruction_path_traditional_flow):
         os.makedirs(reconstruction_path_traditional_flow)
 
-    truth_path = reconstruction_path_traditional_flow + "/grand_truth_images.png"
+    truth_path = reconstruction_path_traditional_flow + f"/grand_truth_images_{args.epochs}.png"
     trained_vqvae_model = vqvae_trainer.vqvae
     # idx = np.random.choice(len(test_data), args.recon_num)
     idx = args.recon_num
@@ -264,9 +274,9 @@ def main():
     np.savetxt(label_save_path, val_labels_name, fmt="%s")
     batch_size = int(pow(args.recon_num, 0.5))
     reconstruction_image = trained_vqvae_model.predict(test_images)
-    reconstruction_save_path = reconstruction_path_traditional_flow + "/reconstruction_image.png"
+    reconstruction_save_path = reconstruction_path_traditional_flow + f"/reconstruction_image_{args.epochs}.png"
 
-    info_f = open(vqvae_metric_save_path + "/info.txt", "w")
+    info_f = open(vqvae_metric_save_path + f"/info_{args.epochs}.txt", "w")
 
     # Return the [0, 1] to [0, 255]
     fid = get_fid_score(tf.cast(test_images * 255, tf.int32), tf.cast(reconstruction_image * 255, tf.int32))
@@ -297,7 +307,7 @@ def main():
     codebook_indices = quantizer.get_code_indices(flat_enc_outputs)
     codebook_indices = codebook_indices.numpy().reshape(encoded_outputs.shape[:-1])
 
-    latent_save_path = reconstruction_path_traditional_flow + "/latent_image.png"
+    latent_save_path = reconstruction_path_traditional_flow + f"/latent_image_{args.epochs}.png"
     show_latent(test_images[:args.latent_num],
                 codebook_indices[:args.latent_num],
                 tf.cast(reconstruction_image[:args.latent_num] * 255, tf.int32),
@@ -313,7 +323,7 @@ def main():
 
     ar_acc = []
     # Test 10 times
-    for _ in range(10):
+    for _ in range(args.test_num):
         # Random choose 80% of test data to test, fold test
         idx = np.random.choice(len(test_data), int(len(test_data) * 0.8))
         test_images = test_data[idx]
@@ -383,7 +393,7 @@ def main():
     decoder = vqvae_trainer.vqvae.get_layer("decoder")
     generated_samples = decoder.predict(quantized)
 
-    sampling_save_path = reconstruction_path_traditional_flow + "/sampling_image.png"
+    sampling_save_path = reconstruction_path_traditional_flow + f"/sampling_image_{args.epochs}.png"
     show_sampling(priors,
                   tf.cast(generated_samples * 255, tf.int32), sampling_save_path,
                   False if generated_samples.shape[3] == 3 else True)

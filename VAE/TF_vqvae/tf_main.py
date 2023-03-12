@@ -23,7 +23,9 @@ import warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 warnings.filterwarnings('ignore')
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-
+#, category=DeprecationWarning)
+# warnings.filterwarnings('ignore', category=PendingDeprecationWarning)
+# warnings.filterwarnings("default")
 # parser
 
 parser = argparse.ArgumentParser(
@@ -64,8 +66,8 @@ parser.add_argument("--embedding_dim", "-D", type=int, default=128,
 parser.add_argument("--num_embeddings", "-K", type=int, default=512,
                     help="Number embedding")
 
-parser.add_argument("--dataset", type=str, default="celeb_a",
-                    help="Dataset: mnist, fashion-mnist, cifar10, stl, celeb_a")
+parser.add_argument("--dataset", type=str, default="mnist",
+                    help="Dataset: mnist, fashion-mnist, cifar10, stl")
 
 parser.add_argument("--recon_num", type=int, default=36, help="Number of reconstruction for image, must be even")
 
@@ -74,6 +76,8 @@ parser.add_argument("--latent_num", type=int, default=10, help="Number of latent
 parser.add_argument("--sampling_num", type=int, default=10, help="Number of sampling for image")
 
 parser.add_argument("--epsilon", type=float, default=2.0, help="Fixed value of epsilon")
+
+parser.add_argument("--test_num", type=int, default=1, help="Number of test accuracy")
 args = parser.parse_args()
 
 
@@ -258,7 +262,7 @@ def main():
     # test_x = tf.tile(test_data, [1, 1, 1, 3])
     # recon_x = tf.tile(reconstruction_image, [1, 1, 1, 3])
 
-    info_f = open(vqvae_metric_save_path+"/info.txt", "w")
+    info_f = open(vqvae_metric_save_path+f"/info_{args.epochs}.txt", "w")
     # Return the [0, 1] to [0, 255]
     fid = get_fid_score(tf.cast(test_images * 255, tf.int32), tf.cast(reconstruction_images * 255, tf.int32))
     print(f"Compare test images with reconstruction images, FID: {fid:.2f}")
@@ -334,13 +338,13 @@ def main():
     """
     tf.compat.v1.reset_default_graph()
 
+    pixel_start = time.time()
     pixel_cnn.compile(
         optimizer=optimizer,
         loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
         metrics=["accuracy"],
     )
 
-    pixel_start = time.time()
     pixel_history = pixel_cnn.fit(
         x=codebook_indices,
         y=codebook_indices,
@@ -355,7 +359,7 @@ def main():
 
     # Compute accuracy of autoregressive model
     ar_acc = []
-    for _ in range(10):
+    for _ in range(args.test_num):
         idx = np.random.choice(len(test_data), int(len(test_data)*0.8))
         test_images = test_data[idx]
 
@@ -439,7 +443,6 @@ def main():
     inception_score = get_inception_score(tf.cast(generated_samples * 255, tf.int8))
     print(f"Compute sampling images, IS: {inception_score:.2f}")
     info_f.write(f"Compute sampling images, IS: {inception_score:.2f}\n")
-    info_f.close()
 
 
 if __name__ == "__main__":
