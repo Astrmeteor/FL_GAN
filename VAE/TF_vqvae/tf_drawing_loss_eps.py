@@ -3,9 +3,10 @@ import csv
 import numpy as np
 import os
 
-dataset = "mnist"
-csv_file = "v1_loss_eps.csv"
-file_name = f"{dataset}/result/{csv_file}"
+dataset = "stl"
+version = "v2"
+csv_file = f"{version}_loss_eps.csv"
+file_name = f"{dataset}/Result/{csv_file}"
 
 csv_reader = csv.reader(open(file_name))
 
@@ -29,7 +30,11 @@ for line in Dataframe[1:]:
 
 fig, ax1 = plt.subplots(figsize=(10, 5))
 
-x = np.arange(1, 51, 1)
+x = np.arange(1, 101, 1)
+
+ax1.set_yscale("log", base=2)
+ax1.set_yticks([0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128])
+ax1.set_yticklabels(["0.0625", "0.125", "0.25", "0.5", "1", "2", "4", "8", "16", "32", "64", "128"])
 
 # loss
 y1 = loss
@@ -51,27 +56,29 @@ y6 = dp_vq_loss
 lns6 = ax1.plot(x, y6, label="DP VQ Loss")
 
 
-ax1.set_ylim([0, 1.1])
-ax1.set_xlim([-0.5, 50])
+# ax1.set_ylim(0, 20)
+ax1.set_xlim([-0.5, 100])
 ax1.set_xlabel("Epoch")
 ax1.set_ylabel("Loss")
 ax1.xaxis.set_major_locator(plt.MultipleLocator(10))
-ax1.yaxis.set_major_locator(plt.MultipleLocator(0.1))
+# ax1.yaxis.set_major_locator(plt.MultipleLocator(0.1))
+
+# ax1.set_zorder(0)
 
 ax2 = ax1.twinx()
 y6 = eps
 lns7 = ax2.plot(x, y6, color="k", label="Epsilon")
-ax2.set_ylim([0, 3])
+ax2.set_ylim([0, 16])
 ax2.set_ylabel("Epsilon")
-ax2.yaxis.set_major_locator(plt.MultipleLocator(0.5))
+ax2.yaxis.set_major_locator(plt.MultipleLocator(1))
 
 # lns = lns1 + lns2 + lns3 + lns4 + lns5 + lns6 + lns7
 # labs = [l.get_label() for l in lns]
-fig.legend(bbox_to_anchor=(0.6, 0.4), loc=6, borderaxespad=0)
+fig.legend(bbox_to_anchor=(0.5, -0.05), loc=8, ncol=7)# , borderaxespad=0)
 # plt.tight_layout()
+plt.title("Loss and Epsilon for VQ-VAE model: STL")
 # plt.show()
-plt.title("Loss and Epsilon for VQ-VAE model ")
-plt.savefig('v1_example.png', dpi=400, format='png', bbox_inches='tight')
+plt.savefig(f'{dataset}/Result/{dataset}_{version}_example.png', dpi=400, format='png', bbox_inches='tight')
 
 
 
