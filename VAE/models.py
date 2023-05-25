@@ -52,7 +52,6 @@ class Decoder(nn.Module):
         self.m1 = DecoderModule(256, 128, stride=1)
         self.m2 = DecoderModule(128, 64, stride=pooling_kernels[1])
         self.m3 = DecoderModule(64, 32, stride=pooling_kernels[0])
-        # self.bottle = DecoderModule(32, color_channels, stride=1, activation="sigmoid")
         self.bottle = DecoderModule(32, color_channels, stride=1, activation="tanh")
 
     def forward(self, x):
@@ -103,7 +102,7 @@ class VAE(nn.Module):
         self.decoder = Decoder(color_channels, pooling_kernel, encoder_output_size)
 
         # history
-        self.history = {"loss": [], "val_loss": []}
+        # self.history = {"loss": [], "val_loss": []}
 
     def _reparameterize(self, mu, logvar):
         #std = logvar.mul(0.5).exp_()
@@ -120,7 +119,6 @@ class VAE(nn.Module):
 
     def sampling(self):
         # assume latent features space ~ N(0, 1)
-        # 64 ？ why
         z = torch.randn(64, self.n_latent_features).to(self.device)
         z = self.fc3(z)
         # decode

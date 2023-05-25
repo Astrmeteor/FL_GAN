@@ -3,7 +3,7 @@ import csv
 import numpy as np
 import os
 
-dataset = "stl"
+dataset = "cifar10"
 version = "v2"
 csv_file = f"{version}_loss_eps.csv"
 file_name = f"{dataset}/Result/{csv_file}"
@@ -68,17 +68,17 @@ ax1.xaxis.set_major_locator(plt.MultipleLocator(10))
 ax2 = ax1.twinx()
 y6 = eps
 lns7 = ax2.plot(x, y6, color="k", label="Epsilon")
-ax2.set_ylim([0, 16])
+ax2.set_ylim([0, 5])
 ax2.set_ylabel("Epsilon")
-ax2.yaxis.set_major_locator(plt.MultipleLocator(1))
+ax2.yaxis.set_major_locator(plt.MultipleLocator(0.5))
 
 # lns = lns1 + lns2 + lns3 + lns4 + lns5 + lns6 + lns7
 # labs = [l.get_label() for l in lns]
 fig.legend(bbox_to_anchor=(0.5, -0.05), loc=8, ncol=7)# , borderaxespad=0)
 # plt.tight_layout()
-plt.title("Loss and Epsilon for VQ-VAE model: STL")
+plt.title(f"Loss and Epsilon for VQ-VAE model: CIFAR-10")
 # plt.show()
-plt.savefig(f'{dataset}/Result/{dataset}_{version}_example.png', dpi=400, format='png', bbox_inches='tight')
+plt.savefig(f'{dataset}_{version}_example.png', dpi=1200, format='png', bbox_inches='tight')
 
 
 

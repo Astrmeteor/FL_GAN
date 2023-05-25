@@ -1,8 +1,9 @@
 import tensorflow as tf
 from tensorflow import keras
 from keras import layers
+from keras.layers import Dense, Flatten, Reshape
+from keras.layers import Conv2D, Conv2DTranspose, BatchNormalization, Activation, LeakyReLU, Reshape
 import numpy as np
-
 
 # `VectorQuantizer` layer
 class VectorQuantizer(layers.Layer):
@@ -186,104 +187,121 @@ class ResidualBlock(layers.Layer):
         # return tf.python.keras.layers.add([inputs, x])
         return layers.add([inputs, x])
 
-"""
-# Define the VQ-VAE model
-class VQVAE(keras.Model):
-    def __init__(self, num_embeddings, embedding_dim, my_input_shape, beta=0.25):
-        super().__init__()
-        self.num_embeddings = num_embeddings
-        self.embedding_dim = embedding_dim
-        self.beta = beta
-        self.my_input_shape = my_input_shape
-        self.encoder = keras.Sequential([
-            tf.keras.layers.Input(shape=my_input_shape[0:]),
-            tf.keras.layers.Conv2D(32, 4, strides=2, padding='same', activation='relu'),
-            tf.keras.layers.Conv2D(64, 4, strides=2, padding='same', activation='relu'),
-            tf.keras.layers.Conv2D(128, 4, strides=2, padding='same', activation='relu'),
-            tf.keras.layers.Conv2D(256, 4, strides=2, padding='same', activation='relu'),
-            tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(embedding_dim, activation=None)
-        ])
-        self.decoder = keras.Sequential([
-            tf.keras.layers.Input(shape=(embedding_dim)),
-            tf.keras.layers.Dense(4 * 4 * 256),
-            tf.keras.layers.Reshape((4, 4, 256)),
-            # tf.keras.layers.Conv2DTranspose(256, 4, strides=2, padding='same', activation='relu'),
-            # tf.keras.layers.Conv2DTranspose(128, 4, strides=2, padding='same', activation='relu'),
-            tf.keras.layers.Conv2DTranspose(64, 4, strides=2, padding='same', activation='relu'),
-            tf.keras.layers.Conv2DTranspose(32, 4, strides=2, padding='same', activation='relu'),
-            tf.keras.layers.Conv2DTranspose(3, 4, strides=2, padding='same', activation=None),
-            tf.keras.layers.Lambda(lambda x: tf.clip_by_value(x, 0.0, 1.0))
-        ])
-        # self.vq_layer = VectorQuantizer(num_embeddings, embedding_dim, beta, name="vector_quantizer")
-        self.vq_layer = VQLayer(num_embeddings, embedding_dim, beta)
 
-    def encode(self, inputs):
-        return self.encoder(inputs)
+class VAE(keras.Model):
+    def __init__(self, dataset):
+        super(VAE, self).__init__()
 
-    def decode(self, latent_vars):
-        return self.decoder(latent_vars)
+        assert dataset in ["mnist", "fashion-mnist", "cifar", "stl"]
 
-    def call(self, inputs):
-        # Encode the inputs
-        latent_vars = self.encode(inputs)
+        # latent features
+        self.n_latent_features = 128
 
-        # Quantize the latent
-        quantized = self.vq_layer(latent_vars)
+        # resolution
+        if dataset in ["mnist", "fashion-mnist"]:
+            pooling_kernel = [2, 2]
+            encoder_output_size = 7
+        elif dataset == "cifar":
+            pooling_kernel = [4, 2]
+            encoder_output_size = 4
+        elif dataset == "stl":
+            pooling_kernel = [4, 4]
+            encoder_output_size = 6
 
-        # Decode the quantized latent variables
-        reconstructed = self.decode(quantized)
+        # color channels
+        if dataset in ["mnist", "fashion-mnist"]:
+            color_channels = 1
+        else:
+            color_channels = 3
 
-        return reconstructed
+        # neurons int middle layer
+        n_neurons_middle_layer = 256 * encoder_output_size * encoder_output_size
 
+        # Encoder
+        self.encoder = Encoder(color_channels, pooling_kernel, n_neurons_middle_layer)
+        # Middle
+        self.fc1 = Dense(self.n_latent_features)
+        self.fc2 = Dense(self.n_latent_features)
+        self.fc3 = Dense(n_neurons_middle_layer)
+        # Decoder
+        self.decoder = Decoder(color_channels, pooling_kernel, encoder_output_size)
 
-class VQLayer(keras.layers.Layer):
-    def __init__(self, num_embeddings, embedding_dim, beta=0.25):
-        super().__init__()
-        self.num_embeddings = num_embeddings
-        self.embedding_dim = embedding_dim
-        self.beta = beta
-        self.embedding = self.add_weight(
-            shape=(num_embeddings, embedding_dim),
-            initializer='glorot_uniform',
-            trainable=True,
-            name='embedding'
-        )
+        # history
+        self.history = {"loss": [], "val_loss": []}
 
-    def get_indicies(self, inputs):
-        # Reshape inputs to 2D tensor
-        flat_inputs = tf.reshape(inputs, [-1, self.embedding_dim])
+    def reparameterize(self, mu, logvar):
+        eps = tf.random.normal(shape=mu.shape)
+        return eps * tf.exp(logvar * .5) + mu
 
-        # Compute distances between inputs and embeddings
-        distances = tf.reduce_sum(tf.square(tf.expand_dims(flat_inputs, axis=1) - self.embedding), axis=2)
+    def bottleneck(self, h):
+        mu, logvar = self.fc1(h), self.fc2(h)
+        z = self.reparameterize(mu, logvar)
+        return z, mu, logvar
 
-        # Find the closest embeddings
-        embedding_indices = tf.argmin(distances, axis=1)
-
-        # Convert embedding indices back to original shape
-        embedding_indices = tf.reshape(embedding_indices, tf.shape(inputs)[:-1])
-
-        return embedding_indices
+    def sampling(self, x=64):
+        z = tf.random.normal(shape=(x, self.n_latent_features))
+        z = self.fc3(z)
+        return self.decoder(z)
 
     def call(self, inputs):
-        # Reshape inputs to 2D tensor
-        flat_inputs = tf.reshape(inputs, [-1, self.embedding_dim])
+        h = self.encoder(inputs)
+        z, mu, logvar = self.bottleneck(h)
+        z = self.fc3(z)
+        return self.decoder(z), mu, logvar
 
-        # Compute distances between inputs and embeddings
-        distances = tf.reduce_sum(tf.square(tf.expand_dims(flat_inputs, axis=1) - self.embedding), axis=2)
 
-        # Find the closest embeddings
-        embedding_indices = tf.argmin(distances, axis=1)
+class EncoderModule(keras.Model):
+    def __init__(self, input_channels, output_channels, stride, kernel, pad):
+        super().__init__()
+        self.conv = Conv2D(output_channels, kernel_size=kernel, padding='same' if pad else 'valid', strides=stride)
+        self.bn = BatchNormalization()
+        self.relu = LeakyReLU()
 
-        # Convert embedding indices back to original shape
-        embedding_indices = tf.reshape(embedding_indices, tf.shape(inputs)[:-1])
+    def call(self, x):
+        return self.relu(self.bn(self.conv(x)))
 
-        # Look up the closest embeddings
-        closest_embeddings = tf.nn.embedding_lookup(self.embedding, embedding_indices)
 
-        # Quantize the input
-        # quantized = closest_embeddings + tf.stop_gradient(quantized - closest_embeddings)
-        quantized = closest_embeddings + tf.stop_gradient(inputs - closest_embeddings)
+class Encoder(keras.Model):
+    def __init__(self, color_channels, pooling_kernels, n_neurons_in_middle_layer):
+        super().__init__()
+        self.n_neurons_in_middle_layer = n_neurons_in_middle_layer
+        self.bottle = EncoderModule(color_channels, 32, stride=1, kernel=1, pad=0)
+        self.m1 = EncoderModule(32, 64, stride=1, kernel=3, pad=1)
+        self.m2 = EncoderModule(64, 128, stride=pooling_kernels[0], kernel=3, pad=1)
+        self.m3 = EncoderModule(128, 256, stride=pooling_kernels[1], kernel=3, pad=1)
 
-        return quantized
-"""
+    def call(self, x):
+        out = self.m3(self.m2(self.m1(self.bottle(x))))
+        return tf.reshape(out, (-1, self.n_neurons_in_middle_layer))
+
+
+class DecoderModule(keras.Model):
+    def __init__(self, input_channels, output_channels, stride, activation="relu"):
+        super().__init__()
+        self.convt = Conv2DTranspose(input_channels, kernel_size=stride, strides=stride)
+        self.bn = BatchNormalization()
+
+        if activation == "relu":
+            self.activation = LeakyReLU()
+        elif activation == "sigmoid":
+            self.activation = Activation('sigmoid')
+        elif activation == "tanh":
+            self.activation = Activation('tanh')
+
+    def call(self, x):
+        return self.activation(self.bn(self.convt(x)))
+
+
+class Decoder(keras.Model):
+    def __init__(self, color_channels, pooling_kernels, decoder_input_size):
+        super().__init__()
+        self.decoder_input_size = decoder_input_size
+        self.m1 = DecoderModule(256, 128, stride=1)
+        self.m2 = DecoderModule(128, 64, stride=pooling_kernels[1])
+        self.m3 = DecoderModule(64, 32, stride=pooling_kernels[0])
+        self.bottle = DecoderModule(32, color_channels, stride=1, activation="tanh")
+
+    def call(self, x):
+        out = tf.reshape(x, (-1, 256, self.decoder_input_size, self.decoder_input_size))
+        out = self.m3(self.m2(self.m1(out)))
+        return self.bottle(out)
